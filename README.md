@@ -1,8 +1,8 @@
 # connecta-m'hi
 
-**connecta-m'hi** is an IPK package for the [SMHUB Nano MG24](https://smlight.tech/product/smhub-nano-mg24/) that connects the device to a [Home Assistant](https://www.home-assistant.io/) instance managed by [oti.cat](https://oti.cat).
+**connecta-m'hi** is an IPK package for the [SMHUB Nano MG24](https://smlight.tech/product/smhub-nano-mg24/) that connects the device to a [Home Assistant](https://www.home-assistant.io/) instance managed by [dom.oti.cat](https://dom.oti.cat).
 
-Once installed, the app appears in the SMHUB sidebar. With a single click you link your SMHUB to your oti.cat Home Assistant instance and then selectively enable three integrations:
+Once installed, the app appears in the SMHUB sidebar. With a single click you link your SMHUB to your dom.oti.cat Home Assistant instance and then selectively enable three integrations:
 
 | Integration | What it does |
 |---|---|
@@ -15,7 +15,7 @@ Once installed, the app appears in the SMHUB sidebar. With a single click you li
 ## Requirements
 
 - **SMHUB Nano MG24** running SMHUB OS 1.0.0 beta4 or later
-- An **oti.cat account** with at least one active Home Assistant instance
+- An **dom.oti.cat account** with at least one active Home Assistant instance
 
 ---
 
@@ -51,13 +51,13 @@ After installation, **connecta-m'hi** appears in the SMHUB sidebar.
 
 ---
 
-## Linking to oti.cat
+## Linking to dom.oti.cat
 
 Open the **connecta-m'hi** app from the SMHUB sidebar. Before linking, it shows the device ID and a button to start the process.
 
 ![App unlinked state](docs/screenshots/02-unlinked.png)
 
-Click **Link to dom.oti.cat**. A new browser tab opens on the oti.cat website where you can select which of your Home Assistant instances to link to this SMHUB.
+Click **Link to dom.oti.cat**. A new browser tab opens on the dom.oti.cat website where you can select which of your Home Assistant instances to link to this SMHUB.
 
 ![HA instance selector](docs/screenshots/03-link-page.png)
 
@@ -112,7 +112,7 @@ Click **Apply** next to *LAN proxy*. This enables two things at once:
 
 ## Unlink
 
-Each integration has its own **Unlink** button that reverts only that integration. The **Unlink** button at the bottom of the card removes all applied integrations and disconnects the SMHUB from oti.cat entirely.
+Each integration has its own **Unlink** button that reverts only that integration. The **Unlink** button at the bottom of the card removes all applied integrations and disconnects the SMHUB from dom.oti.cat entirely.
 
 ---
 
@@ -168,4 +168,4 @@ The workflow reads the version from `control/control`, builds the IPK, creates t
 
 Apache License 2.0 — see [LICENSE](LICENSE).
 
-Copyright 2026 [oti.cat](https://oti.cat)
+Copyright 2026 [dom.oti.cat](https://dom.oti.cat)
