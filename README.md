@@ -83,7 +83,7 @@ After applying, click **Device setup** to get the connection details and a ready
 
 ![Mosquitto device setup](docs/screenshots/05-mqtt-device-setup.png)
 
-Point any Tasmota device at the SMHUB using the displayed credentials. Each device auto-discovers in Home Assistant under **Settings → Devices & Services → MQTT**.
+Point any Tasmota device at the SMHUB using the displayed credentials. Each device auto-discovers in Home Assistant under **Settings → Devices & Services → Tasmota**.
 
 ---
 
@@ -95,7 +95,7 @@ After applying, click **Device setup** for the pairing guide.
 
 ![Zigbee device setup](docs/screenshots/06-zigbee-setup.png)
 
-Paired Zigbee devices appear in Home Assistant under **Settings → Devices & Services → Zigbee2MQTT** with all sensors, switches, and controls created automatically.
+Paired Zigbee devices appear in Home Assistant under **Settings → Devices & Services → MQTT** with all sensors, switches, and controls created automatically.
 
 You can also manage Zigbee devices from the Zigbee2MQTT frontend at `http://smhub.local:8080`.
 
