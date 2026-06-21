@@ -8,7 +8,7 @@ Once installed, the app appears in the SMHUB sidebar. With a single click you li
 |---|---|
 | **Mosquitto bridge** | Extends the SMHUB's local MQTT broker to your HA instance over TLS. Point any Tasmota device at the SMHUB and it auto-discovers in HA. |
 | **Zigbee2MQTT** | Connects the built-in Zigbee radio directly to your HA instance via MQTTS. Zigbee devices paired on the SMHUB appear in HA automatically. |
-| **LAN proxy** | Bridges your home network to HA. HA can reach any device on your home LAN by IP, and your HA instance is reachable from home at `http://smhub.local:8123`. |
+| **LAN proxy** | Bridges your home network to HA. HA can reach any device on your home LAN by IP (currently only TCP), and your HA instance is reachable from home at `http://smhub.local:8123`. |
 
 ---
 
@@ -106,7 +106,7 @@ You can also manage Zigbee devices from the Zigbee2MQTT frontend at `http://smhu
 Click **Apply** next to *LAN proxy*. This enables two things at once:
 
 - **HA accessible at home** — your HA instance is reachable at `http://smhub.local:8123` from any browser on your home network. Use this as the *Local server URL* in the Home Assistant companion app.
-- **HA can reach LAN devices** — HA can connect to any device on your home network by its local IP. Just enter the device's IP directly when configuring any integration — no proxy settings needed. Useful for integrations like ESPHome, local cameras, or other local APIs.
+- **HA can reach LAN devices** — HA can connect to any device on your home network by its local IP. Just enter the device's IP directly when configuring any integration — no proxy settings needed. Useful for integrations like ESPHome, local cameras, or other local APIs. Currently only TCP connections are supported.
 
 ---
 
