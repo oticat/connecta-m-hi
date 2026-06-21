@@ -15,7 +15,7 @@ Once installed, the app appears in the SMHUB sidebar. With a single click you li
 ## Requirements
 
 - **SMHUB Nano MG24** running SMHUB OS 1.0.0 beta4 or later
-- An **dom.oti.cat account** with at least one active Home Assistant instance
+- A **dom.oti.cat account** with at least one active Home Assistant instance
 
 ---
 
