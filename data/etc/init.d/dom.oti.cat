@@ -1,0 +1,22 @@
+#!/sbin/openrc-run
+# Copyright 2026 oti.cat
+# Distributed under the terms of the GNU General Public License v2
+
+description="dom.oti.cat - SMHUB to oti.cat Home Assistant bridge"
+
+supervisor="supervise-daemon"
+command="/opt/bin/node"
+command_args="/opt/oticonnect/server.js"
+command_user="root"
+pidfile="/var/run/dom.oti.cat.pid"
+output_log="/var/log/dom.oti.cat.log"
+error_log="/var/log/dom.oti.cat.log"
+procname="node"
+
+export PATH=/opt/bin:$PATH
+
+depend() {
+	need localmount
+	after api-ready
+	provide dom.oti.cat
+}

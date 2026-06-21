@@ -1,0 +1,11 @@
+#!/bin/sh
+set -e
+
+LOGFILE=/var/log/oticonnect.log
+exec >> "$LOGFILE" 2>&1
+
+echo "[oticonnect] prerm: stopping service..."
+rc-service dom.oti.cat stop 2>/dev/null && echo "[oticonnect] prerm: stopped" || echo "[oticonnect] prerm: stop failed or not running"
+rc-service oticonnect stop 2>/dev/null || true
+
+exit 0
