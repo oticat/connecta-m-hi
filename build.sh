@@ -5,20 +5,22 @@
 set -e
 
 PKGNAME=dom.oti.cat
-VERSION=${VERSION:-1.7.7}
 RELEASE=1
 ARCH=all
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+# Version is read from control/control (single source of truth).
+# Override only if VERSION is explicitly set in the environment.
+if [ -z "$VERSION" ]; then
+  VERSION=$(grep '^Version:' "$SCRIPT_DIR/control/control" | sed 's/^Version: //;s/-.*//')
+fi
+
 OUTDIR="$SCRIPT_DIR/out"
 TMPDIR=$(mktemp -d)
 trap 'rm -rf "$TMPDIR"' EXIT
 
 mkdir -p "$OUTDIR"
-
-# Keep version in control file in sync
-sed -i.bak "s/^Version: .*/Version: ${VERSION}-${RELEASE}/" "$SCRIPT_DIR/control/control"
-rm -f "$SCRIPT_DIR/control/control.bak"
 
 # Ensure scripts are executable before packaging
 chmod +x "$SCRIPT_DIR/control/postinst"

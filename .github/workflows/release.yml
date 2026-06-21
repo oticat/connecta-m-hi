@@ -2,11 +2,6 @@ name: Release IPK
 
 on:
   workflow_dispatch:
-    inputs:
-      version:
-        description: "Version to release (e.g. 1.8.0)"
-        required: true
-        type: string
 
 jobs:
   release:
@@ -18,55 +13,55 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Validate version format
+      - name: Read version from control/control
         run: |
-          if ! echo "${{ inputs.version }}" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
-            echo "ERROR: version must be in X.Y.Z format"
+          VERSION=$(grep '^Version:' control/control | sed 's/^Version: //;s/-.*//')
+          if ! echo "$VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "ERROR: could not parse valid version from control/control (got: '$VERSION')"
+            exit 1
+          fi
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          echo "Releasing v$VERSION"
+
+      - name: Check tag does not already exist
+        run: |
+          if git ls-remote --tags origin "refs/tags/v$VERSION" | grep -q .; then
+            echo "ERROR: tag v$VERSION already exists"
             exit 1
           fi
 
       - name: Build IPK
-        env:
-          VERSION: ${{ inputs.version }}
         run: |
           sudo apt-get install -y binutils
           bash build.sh
 
       - name: Verify artifact
         run: |
-          IPK="out/dom.oti.cat_${{ inputs.version }}-1_all.ipk"
+          IPK="out/dom.oti.cat_${VERSION}-1_all.ipk"
           test -f "$IPK" || { echo "IPK not found: $IPK"; exit 1; }
           echo "IPK_PATH=$IPK" >> "$GITHUB_ENV"
           ls -lh "$IPK"
 
-      - name: Commit version bump
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add control/control
-          git diff --cached --quiet || git commit -m "chore: bump version to ${{ inputs.version }}"
-          git push
-
       - name: Create and push tag
         run: |
-          git tag "v${{ inputs.version }}"
-          git push origin "v${{ inputs.version }}"
+          git tag "v$VERSION"
+          git push origin "v$VERSION"
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v${{ inputs.version }}
-          name: v${{ inputs.version }}
+          tag_name: v${{ env.VERSION }}
+          name: v${{ env.VERSION }}
           body: |
-            ## connecta-m'hi v${{ inputs.version }}
+            ## connecta-m'hi v${{ env.VERSION }}
 
             ### Install on SMHUB Nano MG24
 
-            Download `dom.oti.cat_${{ inputs.version }}-1_all.ipk` below, copy it to your SMHUB and install:
+            Download `dom.oti.cat_${{ env.VERSION }}-1_all.ipk` below, copy it to your SMHUB and install:
 
             ```bash
-            scp dom.oti.cat_${{ inputs.version }}-1_all.ipk smlight@smhub.local:/tmp/
-            ssh smlight@smhub.local "sudo opkg remove dom.oti.cat; sudo opkg install /tmp/dom.oti.cat_${{ inputs.version }}-1_all.ipk"
+            scp dom.oti.cat_${{ env.VERSION }}-1_all.ipk smlight@smhub.local:/tmp/
+            ssh smlight@smhub.local "sudo opkg remove dom.oti.cat; sudo opkg install /tmp/dom.oti.cat_${{ env.VERSION }}-1_all.ipk"
             ```
 
             See the [README](https://github.com/${{ github.repository }}#readme) for full setup instructions.

@@ -120,20 +120,18 @@ Each integration has its own **Unlink** button that reverts only that integratio
 
 ```
 SMHUB Nano MG24              oti.cat cloud              Your HA instance
-┌─────────────────┐          ┌──────────────┐           ┌───────────────┐
-│  connecta-m'hi  │◄─MQTTS──►│  gw (nginx)  │◄─plain──►│  Mosquitto    │
-│  (this package) │          │  SNI routing │           │               │
-│                 │          └──────────────┘           │  Zigbee2MQTT  │
-│  Mosquitto      │                                     │               │
-│  (bridge mode)  │◄──WebSocket (wss)───────────────────│  oticonnect   │
-│                 │                                     │  sidecar      │
-│  Zigbee2MQTT    │──MQTTS direct──────────────────────►│               │
-└─────────────────┘                                     └───────────────┘
+┌─────────────────┐          ┌──────────────┐           ┌─────────────────┐
+│  connecta-m'hi  │◄─MQTTS──►│  Layer7 LB   │◄─plain───►│  Mosquitto      │
+│  (this package) │          │  SNI routing │           │                 │
+│                 │          └──────────────┘           │                 │
+│  Mosquitto      │                                     │                 │
+│  (bridge mode)  │◄──WebSocket (wss)───────────────────│  connecta-m'hi  │
+│                 │                                     │  sidecar        │
+│  Zigbee2MQTT    │──MQTTS direct──────────────────────►│                 │
+└─────────────────┘                                     └─────────────────┘
 ```
 
 The SMHUB-side app (this package) communicates with a sidecar service running on your HA instance via a persistent WebSocket. The LAN proxy and SOCKS5 tunnel for transparent LAN routing are both multiplexed over this same WebSocket connection — no extra ports needed on the cloud side.
-
-MQTT traffic uses the nginx stream module on `gw.i.oti.cat` for SNI-based routing — each HA instance gets its own subdomain and the connection is terminated at the instance's local Mosquitto broker.
 
 ---
 
@@ -158,7 +156,11 @@ VERSION=1.8.0 bash build.sh
 
 ## Releasing
 
-Releases are created via the **Release IPK** GitHub Actions workflow (manual trigger). It builds the IPK, bumps the version in `control/control`, creates a git tag, and publishes a GitHub Release with the IPK attached.
+1. Update `Version:` in `control/control` (e.g. `Version: 1.8.0-1`)
+2. Commit and push
+3. Go to **Actions → Release IPK → Run workflow**
+
+The workflow reads the version from `control/control`, builds the IPK, creates the git tag, and publishes a GitHub Release with the IPK attached. It will fail if the tag already exists.
 
 ---
 
