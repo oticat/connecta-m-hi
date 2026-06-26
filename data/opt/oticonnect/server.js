@@ -666,6 +666,22 @@ body {
 .m-hint { font-size:0.78rem; color:var(--text-sub); line-height:1.6; margin-bottom:1.25rem; }
 .m-em { color:var(--text-label); }
 .m-code { color:var(--code-text); font-family:monospace; }
+.warn-msg {
+  display: none;
+  align-items: flex-start;
+  gap: 0.5rem;
+  padding: 0.55rem 0.75rem;
+  background: #2d1f00;
+  border: 1px solid #92400e;
+  border-radius: 8px;
+  font-size: 0.78rem;
+  color: #f59e0b;
+  line-height: 1.5;
+  margin-bottom: 1rem;
+}
+.warn-msg.show { display: flex; }
+[data-theme="light"] .warn-msg { background: #fffbeb; border-color: #d97706; color: #92400e; }
+.warn-icon { flex-shrink: 0; }
 </style>`;
 
 function renderIntegrationRows(integrations, cfg) {
@@ -874,6 +890,10 @@ ${STYLE}
   <div class="modal-overlay" id="vpnApplyModal">
     <div class="modal">
       <div class="modal-title">Enable LAN proxy?</div>
+      <div class="warn-msg" id="vpn-apply-conflict">
+        <span class="warn-icon">&#9888;</span>
+        <span>Conflicts with <strong>d't HUB</strong> &mdash; also routing this subnet via OpenVPN. LAN proxy takes precedence for TCP traffic.</span>
+      </div>
       <p class="m-body">The following changes will be made:</p>
       <ul class="m-list">
         <li>Open a port forward on <strong class="m-em">port 8123</strong> &mdash; HA accessible at <code class="m-code">${esc(localHaUrl)}</code></li>
@@ -889,6 +909,10 @@ ${STYLE}
   <div class="modal-overlay" id="vpnSetupModal">
     <div class="modal">
       <div class="modal-title">Local HA access</div>
+      <div class="warn-msg" id="vpn-setup-conflict">
+        <span class="warn-icon">&#9888;</span>
+        <span>Conflicts with <strong>d't HUB</strong> &mdash; also routing this subnet via OpenVPN. LAN proxy takes precedence for TCP traffic.</span>
+      </div>
       <table class="info-table">
         <tr>
           <td class="lbl">Local URL</td>
@@ -978,6 +1002,11 @@ ${STYLE}
             dot.className = 'dot';
             st.textContent = 'Connecting…';
           }
+          var showConflict = !!d.vpnConflict;
+          var applyWarn = document.getElementById('vpn-apply-conflict');
+          var setupWarn = document.getElementById('vpn-setup-conflict');
+          if (applyWarn) applyWarn.classList.toggle('show', showConflict);
+          if (setupWarn) setupWarn.classList.toggle('show', showConflict);
         })
         .catch(function() {});
     }
@@ -1185,6 +1214,7 @@ var wsConn = null;
 var wsConnected = false;
 var wsBackoff = 2000;
 var wsReconnectTimer = null;
+var vpnConflict = null;
 
 function wsConnect() {
   var cfg = loadConfig();
@@ -1215,6 +1245,8 @@ function wsConnect() {
       } else if (msg.type === 'welcome') {
         var cfg = loadConfig();
         if (cfg.integrations && cfg.integrations.vpn === 'applied') sendSubnet();
+      } else if (msg.type === 'subnet_conflict') {
+        vpnConflict = msg.iface || null;
       } else if (msg.type === 'socks5') {
         handleSocks5Frame(msg);
       } else if (msg.type === 'proxy') {
@@ -1361,7 +1393,7 @@ const server = http.createServer(function(req, res) {
   if (url.pathname === '/status.json') {
     var sc = loadConfig();
     res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ connected: wsConnected, hasCredentials: !!(sc.credentials && sc.credentials.mqtt_user) }));
+    res.end(JSON.stringify({ connected: wsConnected, hasCredentials: !!(sc.credentials && sc.credentials.mqtt_user), vpnConflict: vpnConflict }));
     return;
   }
 
