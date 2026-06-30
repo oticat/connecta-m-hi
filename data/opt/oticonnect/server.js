@@ -196,10 +196,12 @@ function applyZigbee2mqtt(cfg) {
   }
   var mac = (cfg.deviceId || '000000000000').replace(/:/g, '');
   var clientId = 'z2m_' + mac;
+  var baseTopic = 'zigbee2mqtt_' + mac;
   var yaml = '';
   try { yaml = fs.readFileSync(Z2M_CONFIG, 'utf8'); } catch {}
   var mqttBlock = [
     'mqtt:',
+    '  base_topic: ' + baseTopic,
     '  server: mqtts://' + creds.mqtt_host + ':8883',
     '  user: ' + creds.mqtt_user,
     '  password: ' + creds.mqtt_password,
@@ -794,6 +796,7 @@ function renderLinked(cfg) {
   var tasmotaCmd = 'Backlog MqttHost ' + smhubIp + '; MqttPort 1883; MqttUser ' + mqttUser + '; MqttPassword ' + mqttPass + '; Restart 1';
   var mac = (cfg.deviceId || '000000000000').replace(/:/g, '');
   var z2mClientId = 'z2m_' + mac;
+  var z2mBaseTopic = 'zigbee2mqtt_' + mac;
   var localHaUrl = 'http://' + smhubIp + ':8123';
   return `<!DOCTYPE html>
 <html lang="en">
@@ -874,6 +877,7 @@ ${STYLE}
       <div class="modal-title">Enable Zigbee2MQTT?</div>
       <p class="m-body">The following will be written to <code class="m-code">configuration.yaml</code> and Zigbee2MQTT will be restarted:</p>
       <table class="info-table" style="margin-bottom:1rem">
+        <tr><td class="lbl">base_topic</td><td class="val">${esc(z2mBaseTopic)}</td></tr>
         <tr><td class="lbl">server</td><td class="val">mqtts://${esc(creds.mqtt_host || '')}:8883</td></tr>
         <tr><td class="lbl">user</td><td class="val">${esc(mqttUser)}</td></tr>
         <tr><td class="lbl">client_id</td><td class="val">${esc(z2mClientId)}</td></tr>
