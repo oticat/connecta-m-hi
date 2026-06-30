@@ -67,6 +67,10 @@ Once you confirm the selection, the tab shows a success message and the app card
 
 The status badge turns green when the WebSocket connection to your HA instance is established.
 
+You can verify the same connection from the cloud side: open the **d't HUB** modal on your Home Assistant instance's page at dom.oti.cat, under **Connected devices**. Each linked SMHUB is listed by its device ID (MAC address), along with its public IP, and — if the LAN proxy integration is enabled — the home network's subnet and the SMHUB's local IP on that network.
+
+![Connected devices in the d't HUB modal](docs/screenshots/05-connected-devices.png)
+
 ---
 
 ## Integrations
@@ -81,7 +85,7 @@ Click **Apply** next to *Mosquitto bridge*. The app will:
 
 After applying, click **Device setup** to get the connection details and a ready-to-paste Tasmota one-liner.
 
-![Mosquitto device setup](docs/screenshots/05-mqtt-device-setup.png)
+![Mosquitto device setup](docs/screenshots/06-mqtt-device-setup.png)
 
 Point any Tasmota device at the SMHUB using the displayed credentials. Each device auto-discovers in Home Assistant under **Settings → Devices & Services → Tasmota**.
 
@@ -93,7 +97,7 @@ Click **Apply** next to *Zigbee2MQTT*. The app writes the MQTT connection block 
 
 After applying, click **Device setup** for the pairing guide.
 
-![Zigbee device setup](docs/screenshots/06-zigbee-setup.png)
+![Zigbee device setup](docs/screenshots/07-zigbee-setup.png)
 
 Paired Zigbee devices appear in Home Assistant under **Settings → Devices & Services → MQTT** with all sensors, switches, and controls created automatically.
 
