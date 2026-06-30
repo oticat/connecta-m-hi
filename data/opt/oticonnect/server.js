@@ -1253,7 +1253,7 @@ function wsConnect() {
     var cfg = loadConfig();
     wsConnected = true;
     wsBackoff = 2000;
-    sock.send(JSON.stringify({ type: 'hello', device_id: deviceId, token: cfg.token }));
+    sock.send(JSON.stringify({ type: 'hello', device_id: deviceId, token: cfg.token, lan_ip: getLocalIp() }));
     process.stdout.write('ws connected to ' + cfg.wsUrl + '\n');
   });
 
