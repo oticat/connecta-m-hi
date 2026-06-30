@@ -1210,10 +1210,13 @@ ${STYLE}
 }
 
 // --- WebSocket client (Node.js 22 built-in global WebSocket) ---
+var WS_CONNECT_TIMEOUT_MS = 10000;
 var wsConn = null;
 var wsConnected = false;
 var wsBackoff = 2000;
 var wsReconnectTimer = null;
+var wsConnectTimer = null;
+var wsGen = 0;
 var vpnConflict = null;
 
 function wsConnect() {
@@ -1221,27 +1224,45 @@ function wsConnect() {
   if (!cfg.token || !cfg.wsUrl) return;
   if (wsConn) return;
 
+  var myGen = ++wsGen;
+  var sock;
   try {
-    wsConn = new WebSocket(cfg.wsUrl);
+    sock = new WebSocket(cfg.wsUrl);
   } catch (e) {
     process.stdout.write('ws connect error: ' + e.message + '\n');
     wsScheduleReconnect();
     return;
   }
+  wsConn = sock;
 
-  wsConn.addEventListener('open', function() {
+  // Guards against a hung handshake (no open/close/error ever fires, e.g. after
+  // a network blip) leaving wsConn stuck non-null with no further reconnects.
+  wsConnectTimer = setTimeout(function() {
+    if (myGen !== wsGen) return;
+    wsGen++;
+    try { sock.close(); } catch (e) {}
+    wsConn = null;
+    wsConnected = false;
+    process.stdout.write('ws connect timed out, retry in ' + wsBackoff + 'ms\n');
+    wsScheduleReconnect();
+  }, WS_CONNECT_TIMEOUT_MS);
+
+  sock.addEventListener('open', function() {
+    if (myGen !== wsGen) return;
+    clearTimeout(wsConnectTimer);
     var cfg = loadConfig();
     wsConnected = true;
     wsBackoff = 2000;
-    wsConn.send(JSON.stringify({ type: 'hello', device_id: deviceId, token: cfg.token }));
+    sock.send(JSON.stringify({ type: 'hello', device_id: deviceId, token: cfg.token }));
     process.stdout.write('ws connected to ' + cfg.wsUrl + '\n');
   });
 
-  wsConn.addEventListener('message', function(ev) {
+  sock.addEventListener('message', function(ev) {
+    if (myGen !== wsGen) return;
     try {
       var msg = JSON.parse(ev.data);
       if (msg.type === 'ping') {
-        wsConn.send(JSON.stringify({ type: 'pong' }));
+        sock.send(JSON.stringify({ type: 'pong' }));
       } else if (msg.type === 'welcome') {
         var cfg = loadConfig();
         if (cfg.integrations && cfg.integrations.vpn === 'applied') sendSubnet();
@@ -1255,7 +1276,10 @@ function wsConnect() {
     } catch {}
   });
 
-  wsConn.addEventListener('close', function() {
+  sock.addEventListener('close', function() {
+    if (myGen !== wsGen) return;
+    wsGen++;
+    clearTimeout(wsConnectTimer);
     wsConn = null;
     wsConnected = false;
     proxyConns.forEach(function(e) { e.socket.destroy(); });
@@ -1266,7 +1290,7 @@ function wsConnect() {
     wsScheduleReconnect();
   });
 
-  wsConn.addEventListener('error', function() {
+  sock.addEventListener('error', function() {
     // close event fires after error
   });
 }
@@ -1281,6 +1305,8 @@ function wsScheduleReconnect() {
 }
 
 function wsStop() {
+  wsGen++;
+  if (wsConnectTimer) { clearTimeout(wsConnectTimer); wsConnectTimer = null; }
   if (wsReconnectTimer) { clearTimeout(wsReconnectTimer); wsReconnectTimer = null; }
   if (wsConn) { wsConn.close(); wsConn = null; }
   wsConnected = false;
