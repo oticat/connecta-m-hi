@@ -1,5 +1,26 @@
 # Changelog
 
+## 1.10.0
+
+- **UDP forwards: reach UDP-only LAN devices from Home Assistant.** The existing LAN proxy is
+  TCP-only (redsocks has no UDP support, and SOCKS5 `UDP ASSOCIATE` is not implemented), so
+  devices that speak UDP — Broadlink IR blasters being the common case, which use UDP/80 for
+  everything — were unreachable even with the hub connected.
+
+  The HA sidecar now DNATs a specific `(LAN ip, port)` pair to one of its own local sockets and
+  relays each datagram here over the existing WebSocket as a new `udp` frame; we replay it onto
+  the LAN and send replies back. Because the destination is encoded in the iptables rule, each
+  socket serves exactly one target and no per-datagram destination recovery (TPROXY) is needed.
+  Conntrack rewrites the reply's source back to the device, so HA is none the wiser.
+
+  Forwards are managed by the instance owner from the d't HUB modal on dom.oti.cat.
+
+- **Capability advertisement in `hello`.** The frame now carries `version` (read from opkg's own
+  control file, so it can't drift) and `features`. The sidecar installs UDP rules only for a hub
+  that advertises `udp` — without this an updated sidecar paired with an older hub would install
+  rules that silently swallow traffic a VPN bridge might otherwise carry. Older hubs are
+  unaffected: they ignore unknown frames and simply never get UDP forwards.
+
 ## 1.9.2
 
 - **Mosquitto: defer to the SMHUB's native broker (Option B).** We no longer write our own

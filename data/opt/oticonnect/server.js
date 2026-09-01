@@ -3,10 +3,24 @@ const http = require('http');
 const fs = require('fs');
 const crypto = require('crypto');
 const net = require('net');
+const dgram = require('dgram');
 const os = require('os');
 const { execSync } = require('child_process');
 
 const PORT = 7890;
+// Frame types this build understands. The sidecar gates UDP forwards on 'udp' being present:
+// older builds omit it (and silently ignore unknown frames), so it never installs DNAT rules
+// that would black-hole traffic a VPN bridge could otherwise carry.
+const FEATURES = ['udp'];
+const OPKG_CONTROL = '/var/lib/opkg/info/dom.oti.cat.control';
+
+function readAppVersion() {
+  try {
+    var m = fs.readFileSync(OPKG_CONTROL, 'utf8').match(/^Version:\s*(.+)$/m);
+    if (m) return m[1].trim();
+  } catch {}
+  return null;
+}
 const CONFIG_PATH = '/opt/oticonnect/config.json';
 const LINK_BASE = 'https://dom.oti.cat/api/ha/link';
 const POLL_BASE = 'https://dom.oti.cat/api/ha/link';
@@ -348,6 +362,66 @@ function handleSocks5Frame(msg) {
   }
 }
 
+// --- UDP forwards (Direction A, datagram flavour) ---
+// The sidecar DNATs a (LAN ip, port) pair onto one of its own local sockets and ships each
+// datagram here; we replay it onto the LAN from a per-flow socket and return replies on the same
+// flow_id. Flows are implicit (UDP has no connection), so they are reaped on an idle timer.
+var udpFlows = new Map(); // flow_id → { socket, timer }
+const UDP_FLOW_TTL = 60000;
+
+function udpFlowClose(flowId) {
+  var flow = udpFlows.get(flowId);
+  if (!flow) return;
+  if (flow.timer) clearTimeout(flow.timer);
+  try { flow.socket.close(); } catch {}
+  udpFlows.delete(flowId);
+}
+
+function udpFlowTouch(flowId) {
+  var flow = udpFlows.get(flowId);
+  if (!flow) return;
+  if (flow.timer) clearTimeout(flow.timer);
+  flow.timer = setTimeout(function() { udpFlowClose(flowId); }, UDP_FLOW_TTL);
+}
+
+function handleUdpFrame(msg) {
+  var flowId = msg.flow_id;
+  if (!flowId) return;
+  if (msg.event === 'close') { udpFlowClose(flowId); return; }
+  if (msg.event !== 'send') return;
+
+  var flow = udpFlows.get(flowId);
+  if (!flow) {
+    var sock = dgram.createSocket('udp4');
+    flow = { socket: sock, timer: null };
+    udpFlows.set(flowId, flow);
+    sock.on('message', function(buf) {
+      udpFlowTouch(flowId);
+      if (wsConn) {
+        wsConn.send(JSON.stringify({ type: 'udp', flow_id: flowId, event: 'data', data: buf.toString('base64') }));
+      }
+    });
+    sock.on('error', function(e) {
+      if (wsConn) {
+        wsConn.send(JSON.stringify({ type: 'udp', flow_id: flowId, event: 'error', message: e.message }));
+      }
+      udpFlowClose(flowId);
+    });
+  }
+  udpFlowTouch(flowId);
+  try {
+    flow.socket.send(Buffer.from(msg.data, 'base64'), msg.port, msg.host);
+  } catch (e) {
+    if (wsConn) {
+      wsConn.send(JSON.stringify({ type: 'udp', flow_id: flowId, event: 'error', message: e.message }));
+    }
+  }
+}
+
+function udpFlowsClear() {
+  udpFlows.forEach(function(f, id) { udpFlowClose(id); });
+}
+
 function handleProxyFrame(msg) {
   var connId = msg.conn_id;
   if (!connId) return;
@@ -410,6 +484,7 @@ function removeVpn() {
   proxyConns.clear();
   socks5Conns.forEach(function(s) { s.destroy(); });
   socks5Conns.clear();
+  udpFlowsClear();
 }
 
 function sendSubnet() {
@@ -1337,7 +1412,10 @@ function wsConnect() {
     var cfg = loadConfig();
     wsConnected = true;
     wsBackoff = 2000;
-    sock.send(JSON.stringify({ type: 'hello', device_id: deviceId, token: cfg.token, lan_ip: getLocalIp() }));
+    sock.send(JSON.stringify({
+      type: 'hello', device_id: deviceId, token: cfg.token, lan_ip: getLocalIp(),
+      version: readAppVersion(), features: FEATURES,
+    }));
     process.stdout.write('ws connected to ' + cfg.wsUrl + '\n');
   });
 
@@ -1356,6 +1434,8 @@ function wsConnect() {
         handleSocks5Frame(msg);
       } else if (msg.type === 'proxy') {
         handleProxyFrame(msg);
+      } else if (msg.type === 'udp') {
+        handleUdpFrame(msg);
       }
     } catch {}
   });
@@ -1370,6 +1450,7 @@ function wsConnect() {
     proxyConns.clear();
     socks5Conns.forEach(function(s) { s.destroy(); });
     socks5Conns.clear();
+    udpFlowsClear();
     process.stdout.write('ws closed, retry in ' + wsBackoff + 'ms\n');
     wsScheduleReconnect();
   });
@@ -1399,6 +1480,7 @@ function wsStop() {
   proxyConns.clear();
   socks5Conns.forEach(function(s) { s.destroy(); });
   socks5Conns.clear();
+  udpFlowsClear();
 }
 
 // --- Request handler ---

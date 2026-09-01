@@ -8,7 +8,7 @@ Once installed, the app appears in the SMHUB sidebar. With a single click you li
 |---|---|
 | **Mosquitto bridge** | Extends the SMHUB's local MQTT broker to your HA instance over TLS. Point any Tasmota device at the SMHUB and it auto-discovers in HA. |
 | **Zigbee2MQTT** | Connects the built-in Zigbee radio directly to your HA instance via MQTTS. Zigbee devices paired on the SMHUB appear in HA automatically. |
-| **LAN proxy** | Bridges your home network to HA. HA can reach any device on your home LAN by IP (currently only TCP), and your HA instance is reachable from home at `http://smhub.local:8123`. |
+| **LAN proxy** | Bridges your home network to HA. HA can reach any device on your home LAN by IP — TCP automatically, UDP devices by listing them individually — and your HA instance is reachable from home at `http://smhub.local:8123`. |
 
 ---
 
@@ -110,7 +110,11 @@ You can also manage Zigbee devices from the Zigbee2MQTT frontend at `http://smhu
 Click **Apply** next to *LAN proxy*. This enables two things at once:
 
 - **HA accessible at home** — your HA instance is reachable at `http://smhub.local:8123` from any browser on your home network. Use this as the *Local server URL* in the Home Assistant companion app.
-- **HA can reach LAN devices** — HA can connect to any device on your home network by its local IP. Just enter the device's IP directly when configuring any integration — no proxy settings needed. Useful for integrations like ESPHome, local cameras, or other local APIs. Currently only TCP connections are supported.
+- **HA can reach LAN devices** — HA can connect to any device on your home network by its local IP. Just enter the device's IP directly when configuring any integration — no proxy settings needed. Useful for integrations like ESPHome, local cameras, or other local APIs.
+
+**TCP works automatically; UDP devices need one line of setup.** Any TCP connection to your home network is routed transparently, with nothing to configure. Devices that talk UDP — Broadlink IR blasters being the usual case — need their address and port listed explicitly, because a UDP forward is set up per device rather than for the whole network.
+
+Add them from the **d't HUB** window on dom.oti.cat, under *UDP devices*: pick the device type (which fills in the port for you), enter its IP, and click **Add**. Requires HUB version 1.10.0 or newer. Note that UDP device *discovery* still won't work — add the device by IP in the integration rather than relying on it being found automatically.
 
 ---
 
