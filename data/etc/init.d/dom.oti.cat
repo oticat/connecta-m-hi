@@ -6,7 +6,7 @@ description="dom.oti.cat - SMHUB to oti.cat Home Assistant bridge"
 
 supervisor="supervise-daemon"
 command="/opt/bin/node"
-command_args="/opt/oticonnect/server.js"
+command_args="/opt/dom.oti.cat/server.js"
 command_user="root"
 pidfile="/var/run/dom.oti.cat.pid"
 output_log="/var/log/dom.oti.cat.log"

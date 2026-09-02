@@ -21,7 +21,8 @@ function readAppVersion() {
   } catch {}
   return null;
 }
-const CONFIG_PATH = '/opt/oticonnect/config.json';
+const CONFIG_DIR = '/opt/dom.oti.cat';
+const CONFIG_PATH = CONFIG_DIR + '/config.json';
 const LINK_BASE = 'https://dom.oti.cat/api/ha/link';
 const POLL_BASE = 'https://dom.oti.cat/api/ha/link';
 
@@ -87,6 +88,9 @@ function loadConfig() {
 }
 
 function saveConfig(cfg) {
+  try {
+    fs.mkdirSync(CONFIG_DIR, { recursive: true });
+  } catch {}
   fs.writeFileSync(CONFIG_PATH, JSON.stringify(cfg, null, 2));
 }
 

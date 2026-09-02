@@ -11,7 +11,11 @@ echo "[oticonnect] postinst start"
 # no longer touches the backend DB, opkg lists, or stunnel config.
 
 # --- Clean up cruft from older pre-schema.json installs (no-op on a fresh install) ---
-rm -f /var/lib/opkg/lists/oticonnect-local
+# NB: /var/lib/opkg/lists/oticonnect-local is deliberately NOT removed here. Until the package is
+# published on a feed, that stanza is the only thing that makes the backend resolve us: without it
+# /smhub/packages/dom.oti.cat/isRunning 404s and the UI paints the app "Crashed" (SMHUB >= 1.0.2,
+# whose Packages.load() is built purely from /var/lib/opkg/lists). It is placed by hand on dev
+# hubs, so deleting it here would undo that on every install.
 rm -f /opt/smhub-services/config/stunnel.conf.d/app-oticonnect.conf
 DBFILE="/opt/smhub-services/config/backend.db"
 if [ -f "$DBFILE" ] && command -v sqlite3 > /dev/null 2>&1; then

@@ -28,13 +28,26 @@ chmod +x "$SCRIPT_DIR/control/prerm"
 chmod +x "$SCRIPT_DIR/control/postrm"
 chmod +x "$SCRIPT_DIR/data/etc/init.d/dom.oti.cat"
 
+# Force root ownership inside the archives. Without this the builder's own uid/gid are baked in
+# (on macOS that is 501:staff), and opkg installs the files owned by whatever that maps to on the
+# hub. Flag spelling differs between bsdtar (macOS) and GNU tar (the release workflow's runner).
+if tar --version 2>/dev/null | grep -qi bsdtar; then
+    OWNER_FLAGS="--uid 0 --gid 0 --uname root --gname root"
+else
+    OWNER_FLAGS="--owner=0 --group=0 --numeric-owner"
+fi
+
 echo "[build] control.tar.gz"
 COPYFILE_DISABLE=1 tar -czf "$TMPDIR/control.tar.gz" -C "$SCRIPT_DIR/control" \
-    --exclude='._*' --exclude='.DS_Store' .
+    $OWNER_FLAGS --exclude='._*' --exclude='.DS_Store' .
 
+# Archive the top-level entries by name rather than as '.'. A './' root entry lands in opkg's
+# .list as an empty path, which it then tries to unlink on the next upgrade:
+#   "Removing obsolete file ." / "remove_obsolesced_files: unlinking failed"
 echo "[build] data.tar.gz"
+DATA_ENTRIES=$(cd "$SCRIPT_DIR/data" && ls -A | grep -v -e '^\._' -e '^\.DS_Store$')
 COPYFILE_DISABLE=1 tar -czf "$TMPDIR/data.tar.gz" -C "$SCRIPT_DIR/data" \
-    --exclude='._*' --exclude='.DS_Store' .
+    $OWNER_FLAGS --exclude='._*' --exclude='.DS_Store' $DATA_ENTRIES
 
 echo "[build] debian-binary"
 printf '2.0\n' > "$TMPDIR/debian-binary"

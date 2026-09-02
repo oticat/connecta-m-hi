@@ -1,5 +1,22 @@
 # Changelog
 
+## 1.11.0
+
+- **Sidebar icon shipped by the package.** SMHUB 1.0.2 added `GET /smhub/packages/<key>/icon`,
+  which resolves the icon from the package's own schema, so the icon no longer has to be patched
+  into SMLIGHT's React bundle — a patch that was keyed to the bundle's content hash and did not
+  survive the 1.0.2 firmware upgrade. `schema.json` now declares `system.icons.icon` and the file
+  ships as `icon.svg`.
+
+- **Payload moved from `/opt/oticonnect` to `/opt/dom.oti.cat`.** The icon path is resolved
+  against `PACKAGE_BASE/<package>` (`/opt/<package>`) and rejected if it escapes that directory,
+  so the app's own directory has to be named after the package for the icon to be served at all.
+  `config.json` moves with it.
+
+  `config.json` is written at runtime and so is not owned by opkg, which means the upgrade does
+  not carry it across. On a hub coming from <= 1.10.0 it must be copied into the new directory
+  before the new version starts, or the hub comes back up unlinked.
+
 ## 1.10.0
 
 - **UDP forwards: reach UDP-only LAN devices from Home Assistant.** The existing LAN proxy is
