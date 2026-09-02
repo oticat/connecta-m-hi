@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.11.2
+
+- **VPN-bridge conflict banner reworded.** It claimed "LAN proxy takes precedence for TCP traffic",
+  which stopped being the whole story once UDP forwards landed in 1.10.0: a configured UDP endpoint
+  is DNAT'd to the hub in `nat OUTPUT`, so it overrides the VPN route too. The banner now states the
+  real split — LAN proxy takes TCP, configured UDP endpoints take those flows, everything else keeps
+  using the VPN bridge — and notes that broadcast discovery only works over the VPN, since the
+  forwards are unicast per (ip, port).
+
+  It also said "Conflicts with d't HUB", which reads oddly inside the d't HUB app itself; the subject
+  is now "a VPN bridge", matching the portal's own wording.
+
 ## 1.11.1
 
 - **LAN proxy modal copy: TCP vs UDP.** The "Local HA access" and "Enable LAN proxy?" modals

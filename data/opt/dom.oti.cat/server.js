@@ -1055,7 +1055,7 @@ ${STYLE}
       <div class="modal-title">Enable LAN proxy?</div>
       <div class="warn-msg" id="vpn-apply-conflict">
         <span class="warn-icon">&#9888;</span>
-        <span>Conflicts with <strong>d't HUB</strong> &mdash; also routing this subnet via OpenVPN. LAN proxy takes precedence for TCP traffic.</span>
+        <span>A <strong>VPN bridge</strong> is also routing this subnet via OpenVPN. LAN proxy takes precedence for TCP, and so do any UDP endpoints you add at <code class="m-code">dom.oti.cat</code>; all other traffic still uses the VPN bridge. Broadcast discovery works only over the VPN.</span>
       </div>
       <p class="m-body">The following changes will be made:</p>
       <ul class="m-list">
@@ -1074,7 +1074,7 @@ ${STYLE}
       <div class="modal-title">Local HA access</div>
       <div class="warn-msg" id="vpn-setup-conflict">
         <span class="warn-icon">&#9888;</span>
-        <span>Conflicts with <strong>d't HUB</strong> &mdash; also routing this subnet via OpenVPN. LAN proxy takes precedence for TCP traffic.</span>
+        <span>A <strong>VPN bridge</strong> is also routing this subnet via OpenVPN. LAN proxy takes precedence for TCP, and so do any UDP endpoints you add at <code class="m-code">dom.oti.cat</code>; all other traffic still uses the VPN bridge. Broadcast discovery works only over the VPN.</span>
       </div>
       <table class="info-table">
         <tr>
