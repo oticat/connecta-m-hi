@@ -1060,7 +1060,7 @@ ${STYLE}
       <p class="m-body">The following changes will be made:</p>
       <ul class="m-list">
         <li>Open a port forward on <strong class="m-em">port 8123</strong> &mdash; HA accessible at <code class="m-code">${esc(localHaUrl)}</code></li>
-        <li>Route all HA connections to <strong class="m-em">${esc(lanSubnet || 'your home network')}</strong> transparently through SMHUB &mdash; just enter a device&rsquo;s local IP in any integration, no proxy settings needed</li>
+        <li>Route all HA <strong class="m-em">TCP</strong> connections to <strong class="m-em">${esc(lanSubnet || 'your home network')}</strong> transparently through SMHUB &mdash; just enter a device&rsquo;s local IP in any integration, no proxy settings needed. UDP-only integrations need a UDP forward added at <code class="m-code">dom.oti.cat</code>.</li>
       </ul>
       <div class="modal-actions">
         <button class="btn btn-ghost" onclick="closeVpnApplyModal()">Cancel</button>
@@ -1089,7 +1089,8 @@ ${STYLE}
         </tr>` : ''}
       </table>
       <p class="m-note">Use the Local URL in the Home Assistant companion app as your <strong class="m-em">Local server URL</strong> for instant access when at home.</p>
-      <p class="m-note" style="margin-bottom:0">HA can reach any device on <strong class="m-em">${esc(lanSubnet || 'your home network')}</strong> directly &mdash; just enter its local IP address when configuring an integration. Routing is transparent, no proxy settings needed.</p>
+      <p class="m-note">HA can reach any device on <strong class="m-em">${esc(lanSubnet || 'your home network')}</strong> directly over <strong class="m-em">TCP</strong> &mdash; just enter its local IP address when configuring an integration. Routing is transparent, no proxy settings needed.</p>
+      <p class="m-note" style="margin-bottom:0">Integrations that talk to their device over <strong class="m-em">UDP</strong> (Broadlink IR blasters, for example) are not covered automatically. For those, add the device&rsquo;s IP address and port as a UDP forward in the <strong class="m-em">d&rsquo;t HUB</strong> device connection modal at <code class="m-code">dom.oti.cat</code>, under <strong class="m-em">Connected devices</strong>.</p>
       <div class="modal-actions" style="margin-top:1.25rem">
         <button class="btn btn-ghost" onclick="closeVpnSetupModal()">Close</button>
       </div>

@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.11.1
+
+- **LAN proxy modal copy: TCP vs UDP.** The "Local HA access" and "Enable LAN proxy?" modals
+  claimed HA could reach any LAN device transparently. That is true for TCP only — the transparent
+  routing is a TCP redirect through redsocks, so UDP-only integrations (Broadlink IR blasters and
+  similar) are not covered. Both modals now say TCP explicitly and point the user at the UDP
+  forwards in the d't HUB device connection modal at dom.oti.cat.
+
 ## 1.11.0
 
 - **Sidebar icon shipped by the package.** SMHUB 1.0.2 added `GET /smhub/packages/<key>/icon`,
