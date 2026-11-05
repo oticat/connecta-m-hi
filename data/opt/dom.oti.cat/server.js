@@ -78,6 +78,65 @@ function getLanSubnet() {
   } catch { return null; }
 }
 
+// --- ONVIF WS-Discovery ---
+// The SMHUB is the only component on the customer's LAN, so discovery runs
+// here and the relay asks for it over its camera WebSocket.
+function wsDiscovery(cb) {
+  var devices = new Map();
+  var sock = dgram.createSocket({ type: 'udp4', reuseAddr: true });
+  var msgId = 'uuid:' + crypto.randomUUID();
+  var probe = '<?xml version="1.0" encoding="UTF-8"?>' +
+    '<e:Envelope xmlns:e="http://www.w3.org/2003/05/soap-envelope" ' +
+    'xmlns:w="http://schemas.xmlsoap.org/ws/2004/08/addressing" ' +
+    'xmlns:d="http://schemas.xmlsoap.org/ws/2005/04/discovery" ' +
+    'xmlns:dn="http://www.onvif.org/ver10/network/wsdl">' +
+    '<e:Header><w:MessageID>' + msgId + '</w:MessageID>' +
+    '<w:To e:mustUnderstand="true">urn:schemas-xmlsoap-org:ws:2005:04:discovery</w:To>' +
+    '<w:Action e:mustUnderstand="true">http://schemas.xmlsoap.org/ws/2005/04/discovery/Probe</w:Action>' +
+    '</e:Header><e:Body><d:Probe><d:Types>dn:NetworkVideoTransmitter</d:Types></d:Probe></e:Body></e:Envelope>';
+
+  function decoded(s) {
+    try { return decodeURIComponent(s); } catch (e) { return s; }
+  }
+
+  sock.on('message', function(buf, rinfo) {
+    var xml = buf.toString('utf8');
+    if (xml.indexOf('ProbeMatches') === -1) return;
+    var xaddr = (xml.match(/<[^>]*XAddrs>([^<]+)</) || [])[1] || '';
+    var scopes = (xml.match(/<[^>]*Scopes>([^<]+)</) || [])[1] || '';
+    // Other WS-Discovery devices (NAS, printers) answer the probe too; keep
+    // only endpoints that actually expose ONVIF.
+    if (!/\/onvif\//i.test(xaddr) && !/onvif:\/\/www\.onvif\.org\//.test(scopes)) return;
+    var name = (scopes.match(/onvif:\/\/www\.onvif\.org\/name\/([^\s]+)/) || [])[1] || '';
+    var hardware = (scopes.match(/onvif:\/\/www\.onvif\.org\/hardware\/([^\s]+)/) || [])[1] || '';
+    var ip = rinfo.address;
+    if (devices.has(ip)) return;
+    var port = 80;
+    try {
+      var u = new URL(xaddr);
+      if (u.port) port = parseInt(u.port, 10);
+      else if (u.protocol === 'https:') port = 443;
+    } catch (e) {}
+    devices.set(ip, {
+      ip: ip,
+      port: port,
+      name: [decoded(name), decoded(hardware)].filter(Boolean).join(' ') || ip,
+      hardware: decoded(hardware),
+      xaddr: xaddr,
+    });
+  });
+
+  sock.bind(function() {
+    try { sock.setBroadcast(true); } catch (e) {}
+    try { sock.send(probe, 3702, '239.255.255.250'); } catch (e) {}
+  });
+
+  setTimeout(function() {
+    try { sock.close(); } catch (e) {}
+    cb(Array.from(devices.values()));
+  }, 4000);
+}
+
 // --- Config persistence ---
 function loadConfig() {
   try {
@@ -1480,6 +1539,12 @@ function wsConnect(conn) {
         if (conn.name === 'ha') vpnConflict = msg.iface || null;
       } else if (msg.type === 'socks5') {
         handleSocks5Frame(conn, msg);
+      } else if (msg.type === 'discover') {
+        if (conn.name === 'cam') {
+          wsDiscovery(function(devices) {
+            send(conn, { type: 'discover_result', id: msg.id, devices: devices });
+          });
+        }
       } else if (msg.type === 'proxy') {
         if (conn.name === 'ha') handleProxyFrame(conn, msg);
       } else if (msg.type === 'udp') {
@@ -1655,6 +1720,14 @@ const server = http.createServer(function(req, res) {
         res.writeHead(500, { 'Content-Type': 'text/plain' });
         res.end(e.message);
       }
+    });
+    return;
+  }
+
+  if (url.pathname === '/discover' && req.method === 'GET') {
+    wsDiscovery(function(devices) {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ devices: devices }));
     });
     return;
   }

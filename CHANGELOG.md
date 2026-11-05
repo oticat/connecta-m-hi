@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.14.1
+
+- Discovery waits 4 s and drops WS-Discovery responders that are not ONVIF
+  (NAS, printers), which answer the generic probe too. Labels combine the
+  ONVIF name and hardware (`IPC-BO RLC-510A`).
+
+## 1.14.0
+
+- **ONVIF discovery for the camera service.** `GET /discover` runs a
+  WS-Discovery probe on the LAN, and the `cam` WebSocket accepts a `discover`
+  request and replies with `discover_result` (id + devices). The relay's
+  `cam-agent` uses this to list the cameras it can reach without exposing a
+  discovery socket itself.
+
 ## 1.13.0
 
 - **Camera-only link.** A hub can now be linked to a camera relay with no Home
