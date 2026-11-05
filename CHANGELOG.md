@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.13.0
+
+- **Camera-only link.** A hub can now be linked to a camera relay with no Home
+  Assistant instance. `/store` accepts a payload whose only connection is
+  `cam`, the page is considered linked when either `token` or `cam` exists, the
+  status badge follows `camConnected` when there is no HA, and the MQTT/Z2M
+  integrations are hidden because there is no broker to bridge to. The server
+  side offers "Link cameras only" when the user has a relay but no instance.
+- `device_link.instance_id` is nullable to allow that row.
+
 ## 1.12.0
 
 - **Two WebSocket connections: HA and the camera relay.** `server.js` used to

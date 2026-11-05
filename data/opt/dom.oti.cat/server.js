@@ -958,6 +958,15 @@ function renderLinked(cfg) {
   var mac = (cfg.deviceId || '000000000000').replace(/:/g, '');
   var z2mBaseTopic = 'zigbee2mqtt_' + mac;
   var localHaUrl = 'http://' + smhubIp + ':8123';
+  // A camera-only link has no MQTT broker to bridge to, so the whole
+  // integrations block (and its buttons) is omitted.
+  var integrationsHtml = cfg.token
+    ? `<hr class="divider">
+    <div class="integrations">
+      <div class="integrations-title">Integrations</div>
+      ${renderIntegrationRows(integrations, cfg)}
+    </div>`
+    : '';
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -976,14 +985,10 @@ ${STYLE}
       <span class="dot" id="dot"></span>
       <span id="wsstatus">Connecting&hellip;</span>
     </div>
-    <div class="instance-name">HA instance: ${esc(cfg.name)}</div>
+    <div class="instance-name">${cfg.token ? 'HA instance: ' + esc(cfg.name) : 'Cameras only: ' + esc(cfg.name)}</div>
     ${cfg.cam ? '<div class="device-id" id="camstatus">Camera relay: connecting&hellip;</div>' : ''}
     <div class="device-id">SMHUB Device id: ${esc(cfg.deviceId)}</div>
-    <hr class="divider">
-    <div class="integrations">
-      <div class="integrations-title">Integrations</div>
-      ${renderIntegrationRows(integrations, cfg)}
-    </div>
+    ${integrationsHtml}
     <div id="error-msg" class="error-msg"></div>
     <div class="unlink-row">
       <button class="btn-danger-primary" onclick="openDeviceUnlinkModal()">Unlink</button>
@@ -1158,13 +1163,15 @@ ${STYLE}
   </div>
 
   <script>
+    var haConfigured = ${cfg.token ? 'true' : 'false'};
     function updateStatus() {
       fetch('/status.json')
         .then(function(r) { return r.json(); })
         .then(function(d) {
           var dot = document.getElementById('dot');
           var st = document.getElementById('wsstatus');
-          if (d.connected) {
+          var ok = haConfigured ? d.connected : d.camConnected;
+          if (ok) {
             dot.className = 'dot green';
             st.textContent = 'Connected';
           } else {
@@ -1551,17 +1558,25 @@ const server = http.createServer(function(req, res) {
     readBody(req).then(function(raw) {
       try {
         var data = JSON.parse(raw);
-        if (!data.token || !data.name || !data.ws) throw new Error('bad');
+        var hasHa = !!(data.token && data.ws);
+        var hasCam = !!(data.cam && data.cam.token && data.cam.ws);
+        if (!hasHa && !hasCam) throw new Error('bad');
         var cfg = loadConfig();
-        cfg.token = data.token;
-        cfg.name = data.name;
-        cfg.wsUrl = data.ws;
+        cfg.name = data.name || cfg.name;
+        if (hasHa) {
+          cfg.token = data.token;
+          cfg.wsUrl = data.ws;
+        } else {
+          // Camera-only link: a stale HA token must not linger.
+          delete cfg.token;
+          delete cfg.wsUrl;
+        }
         cfg.deviceId = deviceId;
         cfg.linkedAt = new Date().toISOString();
         cfg.integrations = { zigbee2mqtt: 'pending', mosquitto: 'pending', vpn: 'pending' };
-        // Optional camera relay. Absent => keep an existing link (an HA re-link
-        // must not wipe it); explicit null => clear it.
-        if (data.cam && data.cam.token && data.cam.ws) {
+        // Optional camera relay. Absent => keep an existing link; explicit
+        // null => clear it.
+        if (hasCam) {
           cfg.cam = { token: data.cam.token, wsUrl: data.cam.ws };
         } else if (data.cam === null) {
           delete cfg.cam;
@@ -1570,10 +1585,11 @@ const server = http.createServer(function(req, res) {
         saveConfig(cfg);
         wsStopAll();
         wsConnectAll();
-        fetchCredentials().then(function() {
+        var finish = function() {
           res.writeHead(200, { 'Content-Type': 'text/plain' });
           res.end('ok');
-        });
+        };
+        if (hasHa) fetchCredentials().then(finish); else finish();
       } catch {
         res.writeHead(400);
         res.end('bad request');
@@ -1658,7 +1674,7 @@ const server = http.createServer(function(req, res) {
   if (url.pathname === '/' && req.method === 'GET') {
     var cfg = loadConfig();
     var html;
-    if (cfg.token) {
+    if (cfg.token || cfg.cam) {
       html = renderLinked(cfg);
     } else {
       var state = ensureState(cfg);
