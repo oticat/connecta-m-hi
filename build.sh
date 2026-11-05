@@ -1,5 +1,5 @@
 #!/bin/bash
-# Builds dom.oti.cat_<version>_all.ipk from control/ and data/ directories.
+# Builds dom.oti.cat_<version>_<arch>.ipk from control/ and data/ directories.
 # Run from the repo root or any working directory.
 # Override version: VERSION=1.8.0 bash build.sh
 set -e
@@ -54,7 +54,9 @@ printf '2.0\n' > "$TMPDIR/debian-binary"
 
 echo "[build] assembling IPK"
 IPK="$OUTDIR/${PKGNAME}_${VERSION}-${RELEASE}_${ARCH}.ipk"
-( cd "$TMPDIR" && ar rc "$IPK" debian-binary control.tar.gz data.tar.gz )
+# Portable ar writer: macOS `ar` emits a BSD symbol table that opkg rejects.
+python3 "$SCRIPT_DIR/scripts/make-ipk.py" "$IPK" \
+    "$TMPDIR/debian-binary" "$TMPDIR/control.tar.gz" "$TMPDIR/data.tar.gz"
 
 echo "[build] done: $IPK"
 ls -lh "$IPK"

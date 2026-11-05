@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.12.0
+
+- **Two WebSocket connections: HA and the camera relay.** `server.js` used to
+  hold a single connection. It now keeps independent `ha` and `cam` sockets,
+  each with its own backoff, token and tunnel maps. The `ha` socket keeps the
+  existing sidecar work (credentials, LAN proxy, Open SMHUB, UDP forwards); the
+  `cam` socket carries only the camera tunnel to the per-customer media relay.
+  Video can no longer head-of-line-block HA control traffic.
+- **Optional camera link.** `config.json` gains `cam: {token, wsUrl}`. `/store`
+  accepts an optional `cam` object and leaves an existing link untouched when
+  it is absent; `/status.json` reports `camConnected` alongside `connected`.
+  Hubs without a `cam` entry behave exactly as before.
+- **Local test hooks.** `DOMOTICAT_PORT` and `DOMOTICAT_CONFIG_DIR` let the
+  server run against a temporary config in integration tests.
+
 ## 1.11.2
 
 - **VPN-bridge conflict banner reworded.** It claimed "LAN proxy takes precedence for TCP traffic",

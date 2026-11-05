@@ -7,7 +7,7 @@ const dgram = require('dgram');
 const os = require('os');
 const { execSync } = require('child_process');
 
-const PORT = 7890;
+const PORT = parseInt(process.env.DOMOTICAT_PORT || '7890', 10);
 // Frame types this build understands. The sidecar gates UDP forwards on 'udp' being present:
 // older builds omit it (and silently ignore unknown frames), so it never installs DNAT rules
 // that would black-hole traffic a VPN bridge could otherwise carry.
@@ -21,7 +21,7 @@ function readAppVersion() {
   } catch {}
   return null;
 }
-const CONFIG_DIR = '/opt/dom.oti.cat';
+const CONFIG_DIR = process.env.DOMOTICAT_CONFIG_DIR || '/opt/dom.oti.cat';
 const CONFIG_PATH = CONFIG_DIR + '/config.json';
 const LINK_BASE = 'https://dom.oti.cat/api/ha/link';
 const POLL_BASE = 'https://dom.oti.cat/api/ha/link';
@@ -323,46 +323,55 @@ async function removeZigbee2mqtt() {
 // --- LAN proxy + SOCKS5 tunnel ---
 // Direction A: HA sidecar → SMHUB (socks5 msgs) → LAN TCP connections
 // Direction B: LAN client → SMHUB port 8123 (proxy msgs) → HA instance :8123
+//
+// Each WebSocket connection owns its own maps. `ha` carries the existing LAN
+// proxy/UDP work; `cam` carries only the camera tunnel. Keeping them separate
+// means video can never head-of-line-block HA control traffic.
 
-var socks5Conns = new Map();  // conn_id → net.Socket (LAN-side TCP for Direction A)
-var proxyConns = new Map();   // conn_id → { socket, buf, connected } (Direction B)
 var proxyServer = null;
 
 function genConnId() {
   return crypto.randomBytes(6).toString('hex');
 }
 
-function handleSocks5Frame(msg) {
+function send(conn, obj) {
+  if (conn && conn.ws && conn.connected) {
+    try { conn.ws.send(JSON.stringify(obj)); return true; } catch {}
+  }
+  return false;
+}
+
+function handleSocks5Frame(conn, msg) {
   var connId = msg.conn_id;
   if (!connId) return;
 
   if (msg.event === 'connect') {
     var sock = net.createConnection({ host: msg.host, port: msg.port });
-    socks5Conns.set(connId, sock);
+    conn.socks5Conns.set(connId, sock);
     sock.on('connect', function() {
-      if (wsConn) wsConn.send(JSON.stringify({ type: 'socks5', conn_id: connId, event: 'connected' }));
+      send(conn, { type: 'socks5', conn_id: connId, event: 'connected' });
     });
     sock.on('data', function(buf) {
-      if (wsConn) wsConn.send(JSON.stringify({ type: 'socks5', conn_id: connId, event: 'data', data: buf.toString('base64') }));
+      send(conn, { type: 'socks5', conn_id: connId, event: 'data', data: buf.toString('base64') });
     });
     sock.on('close', function() {
-      socks5Conns.delete(connId);
-      if (wsConn) wsConn.send(JSON.stringify({ type: 'socks5', conn_id: connId, event: 'close' }));
+      conn.socks5Conns.delete(connId);
+      send(conn, { type: 'socks5', conn_id: connId, event: 'close' });
     });
     sock.on('error', function(e) {
-      socks5Conns.delete(connId);
-      if (wsConn) wsConn.send(JSON.stringify({ type: 'socks5', conn_id: connId, event: 'error', message: e.message }));
+      conn.socks5Conns.delete(connId);
+      send(conn, { type: 'socks5', conn_id: connId, event: 'error', message: e.message });
     });
     return;
   }
 
-  var sock = socks5Conns.get(connId);
+  var sock = conn.socks5Conns.get(connId);
   if (!sock) return;
   if (msg.event === 'data') {
     sock.write(Buffer.from(msg.data, 'base64'));
   } else if (msg.event === 'close' || msg.event === 'error') {
     sock.destroy();
-    socks5Conns.delete(connId);
+    conn.socks5Conns.delete(connId);
   }
 }
 
@@ -370,66 +379,60 @@ function handleSocks5Frame(msg) {
 // The sidecar DNATs a (LAN ip, port) pair onto one of its own local sockets and ships each
 // datagram here; we replay it onto the LAN from a per-flow socket and return replies on the same
 // flow_id. Flows are implicit (UDP has no connection), so they are reaped on an idle timer.
-var udpFlows = new Map(); // flow_id → { socket, timer }
+// UDP is HA-only; the maps live on the connection object anyway so teardown is symmetric.
 const UDP_FLOW_TTL = 60000;
 
-function udpFlowClose(flowId) {
-  var flow = udpFlows.get(flowId);
+function udpFlowClose(conn, flowId) {
+  var flow = conn.udpFlows.get(flowId);
   if (!flow) return;
   if (flow.timer) clearTimeout(flow.timer);
   try { flow.socket.close(); } catch {}
-  udpFlows.delete(flowId);
+  conn.udpFlows.delete(flowId);
 }
 
-function udpFlowTouch(flowId) {
-  var flow = udpFlows.get(flowId);
+function udpFlowTouch(conn, flowId) {
+  var flow = conn.udpFlows.get(flowId);
   if (!flow) return;
   if (flow.timer) clearTimeout(flow.timer);
-  flow.timer = setTimeout(function() { udpFlowClose(flowId); }, UDP_FLOW_TTL);
+  flow.timer = setTimeout(function() { udpFlowClose(conn, flowId); }, UDP_FLOW_TTL);
 }
 
-function handleUdpFrame(msg) {
+function handleUdpFrame(conn, msg) {
   var flowId = msg.flow_id;
   if (!flowId) return;
-  if (msg.event === 'close') { udpFlowClose(flowId); return; }
+  if (msg.event === 'close') { udpFlowClose(conn, flowId); return; }
   if (msg.event !== 'send') return;
 
-  var flow = udpFlows.get(flowId);
+  var flow = conn.udpFlows.get(flowId);
   if (!flow) {
     var sock = dgram.createSocket('udp4');
     flow = { socket: sock, timer: null };
-    udpFlows.set(flowId, flow);
+    conn.udpFlows.set(flowId, flow);
     sock.on('message', function(buf) {
-      udpFlowTouch(flowId);
-      if (wsConn) {
-        wsConn.send(JSON.stringify({ type: 'udp', flow_id: flowId, event: 'data', data: buf.toString('base64') }));
-      }
+      udpFlowTouch(conn, flowId);
+      send(conn, { type: 'udp', flow_id: flowId, event: 'data', data: buf.toString('base64') });
     });
     sock.on('error', function(e) {
-      if (wsConn) {
-        wsConn.send(JSON.stringify({ type: 'udp', flow_id: flowId, event: 'error', message: e.message }));
-      }
-      udpFlowClose(flowId);
+      send(conn, { type: 'udp', flow_id: flowId, event: 'error', message: e.message });
+      udpFlowClose(conn, flowId);
     });
   }
-  udpFlowTouch(flowId);
+  udpFlowTouch(conn, flowId);
   try {
     flow.socket.send(Buffer.from(msg.data, 'base64'), msg.port, msg.host);
   } catch (e) {
-    if (wsConn) {
-      wsConn.send(JSON.stringify({ type: 'udp', flow_id: flowId, event: 'error', message: e.message }));
-    }
+    send(conn, { type: 'udp', flow_id: flowId, event: 'error', message: e.message });
   }
 }
 
-function udpFlowsClear() {
-  udpFlows.forEach(function(f, id) { udpFlowClose(id); });
+function udpFlowsClear(conn) {
+  conn.udpFlows.forEach(function(f, id) { udpFlowClose(conn, id); });
 }
 
-function handleProxyFrame(msg) {
+function handleProxyFrame(conn, msg) {
   var connId = msg.conn_id;
   if (!connId) return;
-  var entry = proxyConns.get(connId);
+  var entry = conn.proxyConns.get(connId);
   if (!entry) return;
 
   if (msg.event === 'connected') {
@@ -437,7 +440,7 @@ function handleProxyFrame(msg) {
     if (entry.buf.length) {
       var combined = Buffer.concat(entry.buf);
       entry.buf = [];
-      if (wsConn) wsConn.send(JSON.stringify({ type: 'proxy', conn_id: connId, event: 'data', data: combined.toString('base64') }));
+      send(conn, { type: 'proxy', conn_id: connId, event: 'data', data: combined.toString('base64') });
     }
     return;
   }
@@ -445,29 +448,30 @@ function handleProxyFrame(msg) {
     entry.socket.write(Buffer.from(msg.data, 'base64'));
   } else if (msg.event === 'close' || msg.event === 'error') {
     entry.socket.destroy();
-    proxyConns.delete(connId);
+    conn.proxyConns.delete(connId);
   }
 }
 
 function applyVpn() {
+  var ha = connections.ha;
   if (proxyServer) return;
   proxyServer = net.createServer(function(sock) {
-    if (!wsConn || !wsConnected) { sock.destroy(); return; }
+    if (!ha.ws || !ha.connected) { sock.destroy(); return; }
     var connId = genConnId();
     var entry = { socket: sock, buf: [], connected: false };
-    proxyConns.set(connId, entry);
+    ha.proxyConns.set(connId, entry);
 
     sock.on('data', function(buf) {
       if (!entry.connected) { entry.buf.push(buf); return; }
-      if (wsConn) wsConn.send(JSON.stringify({ type: 'proxy', conn_id: connId, event: 'data', data: buf.toString('base64') }));
+      send(ha, { type: 'proxy', conn_id: connId, event: 'data', data: buf.toString('base64') });
     });
     sock.on('close', function() {
-      proxyConns.delete(connId);
-      if (wsConn) wsConn.send(JSON.stringify({ type: 'proxy', conn_id: connId, event: 'close' }));
+      ha.proxyConns.delete(connId);
+      send(ha, { type: 'proxy', conn_id: connId, event: 'close' });
     });
-    sock.on('error', function() { proxyConns.delete(connId); });
+    sock.on('error', function() { ha.proxyConns.delete(connId); });
 
-    wsConn.send(JSON.stringify({ type: 'proxy', conn_id: connId, event: 'connect', host: 'localhost', port: 8123 }));
+    send(ha, { type: 'proxy', conn_id: connId, event: 'connect', host: 'localhost', port: 8123 });
   });
   proxyServer.on('error', function(e) {
     process.stdout.write('proxy server error: ' + e.message + '\n');
@@ -480,21 +484,21 @@ function applyVpn() {
 }
 
 function removeVpn() {
-  if (wsConn && wsConnected) {
-    wsConn.send(JSON.stringify({ type: 'subnet', cidr: null }));
-  }
+  var ha = connections.ha;
+  send(ha, { type: 'subnet', cidr: null });
   if (proxyServer) { proxyServer.close(); proxyServer = null; }
-  proxyConns.forEach(function(e) { e.socket.destroy(); });
-  proxyConns.clear();
-  socks5Conns.forEach(function(s) { s.destroy(); });
-  socks5Conns.clear();
-  udpFlowsClear();
+  ha.proxyConns.forEach(function(e) { e.socket.destroy(); });
+  ha.proxyConns.clear();
+  ha.socks5Conns.forEach(function(s) { s.destroy(); });
+  ha.socks5Conns.clear();
+  udpFlowsClear(ha);
 }
 
 function sendSubnet() {
+  var ha = connections.ha;
   var cidr = getLanSubnet();
-  if (!cidr || !wsConn || !wsConnected) return;
-  wsConn.send(JSON.stringify({ type: 'subnet', cidr: cidr }));
+  if (!cidr || !ha.ws || !ha.connected) return;
+  send(ha, { type: 'subnet', cidr: cidr });
   process.stdout.write('sent subnet ' + cidr + '\n');
 }
 
@@ -973,6 +977,7 @@ ${STYLE}
       <span id="wsstatus">Connecting&hellip;</span>
     </div>
     <div class="instance-name">HA instance: ${esc(cfg.name)}</div>
+    ${cfg.cam ? '<div class="device-id" id="camstatus">Camera relay: connecting&hellip;</div>' : ''}
     <div class="device-id">SMHUB Device id: ${esc(cfg.deviceId)}</div>
     <hr class="divider">
     <div class="integrations">
@@ -1166,6 +1171,8 @@ ${STYLE}
             dot.className = 'dot';
             st.textContent = 'Connecting…';
           }
+          var camEl = document.getElementById('camstatus');
+          if (camEl) camEl.textContent = 'Camera relay: ' + (d.camConnected ? 'connected' : 'connecting…');
           var showConflict = !!d.vpnConflict;
           var applyWarn = document.getElementById('vpn-apply-conflict');
           var setupWarn = document.getElementById('vpn-setup-conflict');
@@ -1373,91 +1380,120 @@ ${STYLE}
 </html>`;
 }
 
-// --- WebSocket client (Node.js 22 built-in global WebSocket) ---
+// --- WebSocket clients (Node.js 22 built-in global WebSocket) ---
 var WS_CONNECT_TIMEOUT_MS = 10000;
-var wsConn = null;
-var wsConnected = false;
-var wsBackoff = 2000;
-var wsReconnectTimer = null;
-var wsConnectTimer = null;
-var wsGen = 0;
 var vpnConflict = null;
 
-function wsConnect() {
-  var cfg = loadConfig();
-  if (!cfg.token || !cfg.wsUrl) return;
-  if (wsConn) return;
+// Two independent connections:
+//   ha  - HA sidecar: credentials, LAN proxy, Open SMHUB, UDP forwards
+//   cam - media relay cam-agent: camera tunnel only
+// Separate sockets keep video from head-of-line-blocking HA control traffic.
+var connections = {
+  ha: newConnection('ha'),
+  cam: newConnection('cam'),
+};
 
-  var myGen = ++wsGen;
+function newConnection(name) {
+  return {
+    name: name,
+    ws: null,
+    connected: false,
+    backoff: 2000,
+    reconnectTimer: null,
+    connectTimer: null,
+    gen: 0,
+    socks5Conns: new Map(),
+    proxyConns: new Map(),
+    udpFlows: new Map(),
+  };
+}
+
+function connectionTarget(conn, cfg) {
+  if (conn.name === 'cam') {
+    if (!cfg.cam || !cfg.cam.token || !cfg.cam.wsUrl) return null;
+    return { url: cfg.cam.wsUrl, token: cfg.cam.token };
+  }
+  if (!cfg.token || !cfg.wsUrl) return null;
+  return { url: cfg.wsUrl, token: cfg.token };
+}
+
+function wsConnect(conn) {
+  var cfg = loadConfig();
+  var target = connectionTarget(conn, cfg);
+  if (!target) return;
+  if (conn.ws) return;
+
+  var myGen = ++conn.gen;
   var sock;
   try {
-    sock = new WebSocket(cfg.wsUrl);
+    sock = new WebSocket(target.url);
   } catch (e) {
-    process.stdout.write('ws connect error: ' + e.message + '\n');
-    wsScheduleReconnect();
+    process.stdout.write(conn.name + ' ws connect error: ' + e.message + '\n');
+    wsScheduleReconnect(conn);
     return;
   }
-  wsConn = sock;
+  conn.ws = sock;
 
   // Guards against a hung handshake (no open/close/error ever fires, e.g. after
-  // a network blip) leaving wsConn stuck non-null with no further reconnects.
-  wsConnectTimer = setTimeout(function() {
-    if (myGen !== wsGen) return;
-    wsGen++;
+  // a network blip) leaving conn.ws stuck non-null with no further reconnects.
+  conn.connectTimer = setTimeout(function() {
+    if (myGen !== conn.gen) return;
+    conn.gen++;
     try { sock.close(); } catch (e) {}
-    wsConn = null;
-    wsConnected = false;
-    process.stdout.write('ws connect timed out, retry in ' + wsBackoff + 'ms\n');
-    wsScheduleReconnect();
+    conn.ws = null;
+    conn.connected = false;
+    process.stdout.write(conn.name + ' ws connect timed out, retry in ' + conn.backoff + 'ms\n');
+    wsScheduleReconnect(conn);
   }, WS_CONNECT_TIMEOUT_MS);
 
   sock.addEventListener('open', function() {
-    if (myGen !== wsGen) return;
-    clearTimeout(wsConnectTimer);
-    var cfg = loadConfig();
-    wsConnected = true;
-    wsBackoff = 2000;
+    if (myGen !== conn.gen) return;
+    clearTimeout(conn.connectTimer);
+    conn.connected = true;
+    conn.backoff = 2000;
     sock.send(JSON.stringify({
-      type: 'hello', device_id: deviceId, token: cfg.token, lan_ip: getLocalIp(),
+      type: 'hello', device_id: deviceId, token: target.token, lan_ip: getLocalIp(),
       version: readAppVersion(), features: FEATURES,
     }));
-    process.stdout.write('ws connected to ' + cfg.wsUrl + '\n');
+    process.stdout.write(conn.name + ' ws connected to ' + target.url + '\n');
   });
 
   sock.addEventListener('message', function(ev) {
-    if (myGen !== wsGen) return;
+    if (myGen !== conn.gen) return;
     try {
       var msg = JSON.parse(ev.data);
       if (msg.type === 'ping') {
         sock.send(JSON.stringify({ type: 'pong' }));
       } else if (msg.type === 'welcome') {
-        var cfg = loadConfig();
-        if (cfg.integrations && cfg.integrations.vpn === 'applied') sendSubnet();
+        if (conn.name === 'ha') {
+          var cfg = loadConfig();
+          if (cfg.integrations && cfg.integrations.vpn === 'applied') sendSubnet();
+        }
       } else if (msg.type === 'subnet_conflict') {
-        vpnConflict = msg.iface || null;
+        if (conn.name === 'ha') vpnConflict = msg.iface || null;
       } else if (msg.type === 'socks5') {
-        handleSocks5Frame(msg);
+        handleSocks5Frame(conn, msg);
       } else if (msg.type === 'proxy') {
-        handleProxyFrame(msg);
+        if (conn.name === 'ha') handleProxyFrame(conn, msg);
       } else if (msg.type === 'udp') {
-        handleUdpFrame(msg);
+        if (conn.name === 'ha') handleUdpFrame(conn, msg);
       }
     } catch {}
   });
 
   sock.addEventListener('close', function() {
-    if (myGen !== wsGen) return;
-    wsGen++;
-    clearTimeout(wsConnectTimer);
-    wsConn = null;
-    wsConnected = false;
-    proxyConns.forEach(function(e) { e.socket.destroy(); });
-    proxyConns.clear();
-    socks5Conns.forEach(function(s) { s.destroy(); });
-    socks5Conns.clear();
-    udpFlowsClear();
-    process.stdout.write('ws closed, retry in ' + wsBackoff + 'ms\n');
-    wsScheduleReconnect();
+    if (myGen !== conn.gen) return;
+    conn.gen++;
+    clearTimeout(conn.connectTimer);
+    conn.ws = null;
+    conn.connected = false;
+    conn.proxyConns.forEach(function(e) { e.socket.destroy(); });
+    conn.proxyConns.clear();
+    conn.socks5Conns.forEach(function(s) { s.destroy(); });
+    conn.socks5Conns.clear();
+    udpFlowsClear(conn);
+    process.stdout.write(conn.name + ' ws closed, retry in ' + conn.backoff + 'ms\n');
+    wsScheduleReconnect(conn);
   });
 
   sock.addEventListener('error', function() {
@@ -1465,27 +1501,36 @@ function wsConnect() {
   });
 }
 
-function wsScheduleReconnect() {
-  if (wsReconnectTimer) return;
-  wsReconnectTimer = setTimeout(function() {
-    wsReconnectTimer = null;
-    wsConnect();
-  }, wsBackoff);
-  wsBackoff = Math.min(wsBackoff * 2, 60000);
+function wsScheduleReconnect(conn) {
+  if (conn.reconnectTimer) return;
+  conn.reconnectTimer = setTimeout(function() {
+    conn.reconnectTimer = null;
+    wsConnect(conn);
+  }, conn.backoff);
+  conn.backoff = Math.min(conn.backoff * 2, 60000);
 }
 
-function wsStop() {
-  wsGen++;
-  if (wsConnectTimer) { clearTimeout(wsConnectTimer); wsConnectTimer = null; }
-  if (wsReconnectTimer) { clearTimeout(wsReconnectTimer); wsReconnectTimer = null; }
-  if (wsConn) { wsConn.close(); wsConn = null; }
-  wsConnected = false;
-  wsBackoff = 2000;
-  proxyConns.forEach(function(e) { e.socket.destroy(); });
-  proxyConns.clear();
-  socks5Conns.forEach(function(s) { s.destroy(); });
-  socks5Conns.clear();
-  udpFlowsClear();
+function wsStop(conn) {
+  conn.gen++;
+  if (conn.connectTimer) { clearTimeout(conn.connectTimer); conn.connectTimer = null; }
+  if (conn.reconnectTimer) { clearTimeout(conn.reconnectTimer); conn.reconnectTimer = null; }
+  if (conn.ws) { try { conn.ws.close(); } catch (e) {} conn.ws = null; }
+  conn.connected = false;
+  conn.backoff = 2000;
+  conn.proxyConns.forEach(function(e) { e.socket.destroy(); });
+  conn.proxyConns.clear();
+  conn.socks5Conns.forEach(function(s) { s.destroy(); });
+  conn.socks5Conns.clear();
+  udpFlowsClear(conn);
+}
+
+function wsStopAll() {
+  Object.keys(connections).forEach(function(k) { wsStop(connections[k]); });
+}
+
+function wsConnectAll() {
+  wsConnect(connections.ha);
+  wsConnect(connections.cam);
 }
 
 // --- Request handler ---
@@ -1514,10 +1559,17 @@ const server = http.createServer(function(req, res) {
         cfg.deviceId = deviceId;
         cfg.linkedAt = new Date().toISOString();
         cfg.integrations = { zigbee2mqtt: 'pending', mosquitto: 'pending', vpn: 'pending' };
+        // Optional camera relay. Absent => keep an existing link (an HA re-link
+        // must not wipe it); explicit null => clear it.
+        if (data.cam && data.cam.token && data.cam.ws) {
+          cfg.cam = { token: data.cam.token, wsUrl: data.cam.ws };
+        } else if (data.cam === null) {
+          delete cfg.cam;
+        }
         delete cfg.state;
         saveConfig(cfg);
-        wsStop();
-        wsConnect();
+        wsStopAll();
+        wsConnectAll();
         fetchCredentials().then(function() {
           res.writeHead(200, { 'Content-Type': 'text/plain' });
           res.end('ok');
@@ -1532,7 +1584,7 @@ const server = http.createServer(function(req, res) {
 
   if (url.pathname === '/unlink' && req.method === 'POST') {
     var unlinkCfg = loadConfig();
-    wsStop();
+    wsStopAll();
     removeVpn();
     // Revoke the token server-side before we discard it locally (best-effort — never blocks unlink).
     revokeToken(unlinkCfg).then(function() {
@@ -1594,7 +1646,12 @@ const server = http.createServer(function(req, res) {
   if (url.pathname === '/status.json') {
     var sc = loadConfig();
     res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ connected: wsConnected, hasCredentials: !!(sc.credentials && sc.credentials.mqtt_user), vpnConflict: vpnConflict }));
+    res.end(JSON.stringify({
+      connected: connections.ha.connected,
+      camConnected: connections.cam.connected,
+      hasCredentials: !!(sc.credentials && sc.credentials.mqtt_user),
+      vpnConflict: vpnConflict,
+    }));
     return;
   }
 
@@ -1619,7 +1676,7 @@ const server = http.createServer(function(req, res) {
 server.listen(PORT, '0.0.0.0', function() {
   process.stdout.write('oticonnect listening on :' + PORT + ' (device: ' + deviceId + ')\n');
   var cfg = loadConfig();
-  wsConnect();
+  wsConnectAll();
   if (cfg.integrations && cfg.integrations.vpn === 'applied') applyVpn();
   // Refresh stored credentials (best-effort). z2m/mosquitto config now lives in SMHUB's own config
   // store, so there's no drift to reconcile on boot — the SMHUB no longer clobbers our settings.
@@ -1627,7 +1684,7 @@ server.listen(PORT, '0.0.0.0', function() {
 });
 
 process.on('SIGTERM', function() {
-  wsStop();
+  wsStopAll();
   removeVpn();
   server.close(function() { process.exit(0); });
 });

@@ -31,9 +31,7 @@ jobs:
           fi
 
       - name: Build IPK
-        run: |
-          sudo apt-get install -y binutils
-          bash build.sh
+        run: bash build.sh
 
       - name: Verify artifact
         run: |
