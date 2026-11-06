@@ -549,6 +549,48 @@ function applyVpn() {
   });
 }
 
+// Camera LAN proxy: a LAN device (the DoorBird's motion notification) calls
+// this port and the bytes are tunnelled over the `cam` WebSocket to the relay's
+// local listener (cam-agent :8125). Same machinery as the HA LAN proxy, kept
+// separate from it: it exists whenever the hub is linked to a relay, not when
+// the VPN integration is applied.
+var camProxyServer = null;
+var CAM_PROXY_PORT = 7800;
+var CAM_PROXY_TARGET = { host: '127.0.0.1', port: 8125 };
+
+function applyCamProxy() {
+  if (camProxyServer) return;
+  camProxyServer = net.createServer(function(sock) {
+    var cam = connections.cam;
+    if (!cam.ws || !cam.connected) { sock.destroy(); return; }
+    var connId = genConnId();
+    var entry = { socket: sock, buf: [], connected: false };
+    cam.proxyConns.set(connId, entry);
+
+    sock.on('data', function(buf) {
+      if (!entry.connected) { entry.buf.push(buf); return; }
+      send(cam, { type: 'proxy', conn_id: connId, event: 'data', data: buf.toString('base64') });
+    });
+    sock.on('close', function() {
+      cam.proxyConns.delete(connId);
+      send(cam, { type: 'proxy', conn_id: connId, event: 'close' });
+    });
+    sock.on('error', function() { cam.proxyConns.delete(connId); });
+
+    send(cam, {
+      type: 'proxy', conn_id: connId, event: 'connect',
+      host: CAM_PROXY_TARGET.host, port: CAM_PROXY_TARGET.port
+    });
+  });
+  camProxyServer.on('error', function(e) {
+    process.stdout.write('camera proxy error: ' + e.message + '\n');
+    camProxyServer = null;
+  });
+  camProxyServer.listen(CAM_PROXY_PORT, '0.0.0.0', function() {
+    process.stdout.write('camera LAN proxy listening on :' + CAM_PROXY_PORT + '\n');
+  });
+}
+
 function removeVpn() {
   var ha = connections.ha;
   send(ha, { type: 'subnet', cidr: null });
@@ -1613,7 +1655,7 @@ function wsConnect(conn) {
           });
         }
       } else if (msg.type === 'proxy') {
-        if (conn.name === 'ha') handleProxyFrame(conn, msg);
+        handleProxyFrame(conn, msg);
       } else if (msg.type === 'udp') {
         if (conn.name === 'ha') handleUdpFrame(conn, msg);
       }
@@ -1934,6 +1976,7 @@ server.listen(PORT, '0.0.0.0', function() {
   process.stdout.write('oticonnect listening on :' + PORT + ' (device: ' + deviceId + ')\n');
   var cfg = loadConfig();
   wsConnectAll();
+  applyCamProxy();
   // Follow the control plane's current camera relay. The linked payload is a
   // snapshot; this is what makes a new or replaced relay visible without a
   // relink.

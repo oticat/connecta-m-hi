@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.16.0
+
+- **Camera motion relay.** A new `GET|POST /camera/notify?relay=…&camera=…&event=…`
+  endpoint forwards a camera's motion event to the relay over the `cam`
+  WebSocket (`{type:"cam_event"}`). It exists because the DoorBird reports
+  motion only by calling a URL, and only the hub is reachable from the customer
+  LAN. The body is ignored on purpose (newer firmware may encrypt it) and the
+  endpoint answers 200 even without a relay, so the camera does not retry.
+
 ## 1.15.0
 
 - **The camera relay follows the control plane.** The link payload used to be a
