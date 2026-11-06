@@ -777,7 +777,7 @@ body {
 }
 .int-status.pending { background: var(--status-pending-bg); color: var(--status-pending-text); }
 .int-status.applied { background: var(--status-applied-bg); color: var(--status-applied-text); }
-.unlink-row { margin-top: 1.5rem; }
+.unlink-row { margin-top: 1.5rem; display: flex; gap: 0.6rem; justify-content: center; align-items: center; flex-wrap: wrap; }
 .page-progress {
   position: fixed;
   top: 0; left: 0; right: 0;
@@ -984,7 +984,7 @@ ${STYLE}
           return null;
         })
         .then(function(data) {
-          if (data && data.token) {
+          if (data && (data.token || (data.cam && data.cam.token))) {
             return fetch('/store', {
               method: 'POST',
               headers: {'Content-Type': 'application/json'},
@@ -1017,6 +1017,15 @@ function renderLinked(cfg) {
   var mac = (cfg.deviceId || '000000000000').replace(/:/g, '');
   var z2mBaseTopic = 'zigbee2mqtt_' + mac;
   var localHaUrl = 'http://' + smhubIp + ':8123';
+  // Relinking reuses the link/unlink flow from dom, but without touching the
+  // integrations: the same instance keeps them, a different one re-applies.
+  var relinkState = ensureState(cfg);
+  var relinkUrl = LINK_BASE
+    + '?device=' + encodeURIComponent(cfg.deviceId)
+    + '&state=' + encodeURIComponent(relinkState);
+  var relinkPollUrl = POLL_BASE
+    + '?poll=1&device=' + encodeURIComponent(cfg.deviceId)
+    + '&state=' + encodeURIComponent(relinkState);
   // A camera-only link has no MQTT broker to bridge to, so the whole
   // integrations block (and its buttons) is omitted.
   var integrationsHtml = cfg.token
@@ -1050,8 +1059,10 @@ ${STYLE}
     ${integrationsHtml}
     <div id="error-msg" class="error-msg"></div>
     <div class="unlink-row">
+      <button class="btn" onclick="startRelink()">Update link</button>
       <button class="btn-danger-primary" onclick="openDeviceUnlinkModal()">Unlink</button>
     </div>
+    <div class="hint" id="relink-hint">Update link reconnects this SMHUB &mdash; pick the instance or camera relay again. Applied integrations are kept.</div>
   </div>
 
   <div class="modal-overlay" id="integrationUnlinkModal">
@@ -1223,6 +1234,8 @@ ${STYLE}
 
   <script>
     var haConfigured = ${cfg.token ? 'true' : 'false'};
+    var relinkUrl = ${JSON.stringify(relinkUrl)};
+    var relinkPollUrl = ${JSON.stringify(relinkPollUrl)};
     function updateStatus() {
       fetch('/status.json')
         .then(function(r) { return r.json(); })
@@ -1255,6 +1268,7 @@ ${STYLE}
     )};
 
     var _pendingUnlinkKey = null;
+    var _relinkTimer = null;
     var _integrationLabels = { zigbee2mqtt: 'Zigbee2MQTT', mosquitto: 'Mosquitto bridge', vpn: 'LAN proxy' };
     var _integrationRemoveDesc = {
       zigbee2mqtt: 'This will revert the Zigbee2MQTT MQTT config back to localhost:1883, disable HA discovery, and restart Zigbee2MQTT.',
@@ -1281,6 +1295,49 @@ ${STYLE}
       doPost('/integration/remove', { integration: key })
         .then(function() { location.reload(); })
         .catch(function(e) { showError(e.message); });
+    }
+
+    function startRelink() {
+      clearError();
+      var hint = document.getElementById('relink-hint');
+      var theme = document.documentElement.getAttribute('data-theme') || 'dark';
+      window.open(relinkUrl + '&theme=' + encodeURIComponent(theme), '_blank');
+      if (_relinkTimer) return;
+      if (hint) hint.textContent = 'Complete the link in the browser tab. This page updates by itself.';
+      var deadline = Date.now() + 5 * 60 * 1000;
+      _relinkTimer = setInterval(function() {
+        if (Date.now() > deadline) {
+          clearInterval(_relinkTimer);
+          _relinkTimer = null;
+          if (hint) hint.textContent = 'Update link reconnects this SMHUB — pick the instance or camera relay again. Applied integrations are kept.';
+          return;
+        }
+        fetch(relinkPollUrl)
+          .then(function(r) {
+            if (r.status !== 200) return null;
+            return r.json();
+          })
+          .then(function(data) {
+            // Camera-only accounts have no HA token; accept either connection.
+            if (!data || (!data.token && !(data.cam && data.cam.token))) return;
+            clearInterval(_relinkTimer);
+            _relinkTimer = null;
+            startLoading();
+            // relink: true keeps the integration state on the hub unless the
+            // Home Assistant instance itself changed.
+            return fetch('/store', {
+              method: 'POST',
+              headers: {'Content-Type': 'application/json'},
+              body: JSON.stringify({
+                token: data.token, name: data.name, ws: data.ws, cam: data.cam, relink: true
+              })
+            }).then(function(r) {
+              if (!r.ok) return r.text().then(function(t) { throw new Error(t || 'Relink failed'); });
+              location.reload();
+            });
+          })
+          .catch(function(e) { showError(e.message); });
+      }, 2000);
     }
 
     function openDeviceUnlinkModal() {
@@ -1627,6 +1684,11 @@ const server = http.createServer(function(req, res) {
         var hasCam = !!(data.cam && data.cam.token && data.cam.ws);
         if (!hasHa && !hasCam) throw new Error('bad');
         var cfg = loadConfig();
+        // A relink (from the linked page) must not undo the integrations: they
+        // are torn down by /unlink, and only a different HA instance invalidates
+        // them. The hub identifies "same instance" by its WebSocket URL.
+        var isRelink = data.relink === true && !!(cfg.token || cfg.cam);
+        var sameInstance = isRelink && hasHa && cfg.wsUrl === data.ws;
         cfg.name = data.name || cfg.name;
         if (hasHa) {
           cfg.token = data.token;
@@ -1638,7 +1700,9 @@ const server = http.createServer(function(req, res) {
         }
         cfg.deviceId = deviceId;
         cfg.linkedAt = new Date().toISOString();
-        cfg.integrations = { zigbee2mqtt: 'pending', mosquitto: 'pending', vpn: 'pending' };
+        if (!sameInstance) {
+          cfg.integrations = { zigbee2mqtt: 'pending', mosquitto: 'pending', vpn: 'pending' };
+        }
         // Optional camera relay. Absent => keep an existing link; explicit
         // null => clear it.
         if (hasCam) {

@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.14.2
+
+- **Relink without unlinking.** The linked page gains an **Update link** button
+  that runs the same link flow as a fresh setup and stores the new payload with
+  `relink: true`. `/store` keeps the applied integrations when the Home
+  Assistant instance is unchanged and only resets them to pending when the
+  instance's WebSocket URL differs; `/unlink` remains the only thing that tears
+  them down. Fixes having to unlink (and lose the LAN proxy/VPN) just to pick up
+  a new or re-created camera relay.
+- **Camera-only devices can complete a link.** The unlinked page's poll only
+  accepted a payload with an HA `token`, so a camera-only link (`token: null`)
+  was polled forever and never stored. It now accepts either connection.
+
 ## 1.14.1
 
 - Discovery waits 4 s and drops WS-Discovery responders that are not ONVIF
