@@ -1,5 +1,25 @@
 # Changelog
 
+## 1.15.0
+
+- **The camera relay follows the control plane.** The link payload used to be a
+  snapshot: a cam JWT bound to one relay id, stored forever. Creating, deleting
+  or replacing a relay then needed an Update link by hand. The hub now keeps the
+  device-scoped token and asks `GET /api/cameras/endpoint` for the current relay
+  — at boot, after every link, every 5 minutes while connected, every minute
+  while the cam socket is down, and immediately when it drops (which also
+  refreshes the short-lived cam token). A different `ws` reconnects the socket; a
+  missing relay clears the camera link. No relink when a relay changes.
+- The endpoint answer wins over `config.json` (`camRuntime`), so the refreshed
+  one-hour cam token is not written to flash every few minutes. Only a relay
+  change is persisted.
+- **Revoke works for camera-only links.** `/unlink` falls back to the device
+  token, and `/api/ha/link/revoke` accepts it (`scope: "device"`), so a hub with
+  no HA instance can drop its own link.
+- `DOMOTICAT_API`, `DOMOTICAT_CAM_POLL_CONNECTED_MS` and
+  `DOMOTICAT_CAM_POLL_BROKEN_MS` are test hooks; `test/camera-endpoint.js` runs
+  the real server against a fake control plane and proves the relay switch.
+
 ## 1.14.2
 
 - **Relink without unlinking.** The linked page gains an **Update link** button

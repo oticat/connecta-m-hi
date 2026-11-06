@@ -23,11 +23,15 @@ function readAppVersion() {
 }
 const CONFIG_DIR = process.env.DOMOTICAT_CONFIG_DIR || '/opt/dom.oti.cat';
 const CONFIG_PATH = CONFIG_DIR + '/config.json';
-const LINK_BASE = 'https://dom.oti.cat/api/ha/link';
-const POLL_BASE = 'https://dom.oti.cat/api/ha/link';
+// Overridable so the integration tests can point the hub at a fake control
+// plane instead of the real one.
+const DOM_BASE = (process.env.DOMOTICAT_API || 'https://dom.oti.cat').replace(/\/+$/, '');
+const LINK_BASE = DOM_BASE + '/api/ha/link';
+const POLL_BASE = DOM_BASE + '/api/ha/link';
 
-const CREDENTIALS_URL = 'https://dom.oti.cat/api/ha/credentials';
-const REVOKE_URL = 'https://dom.oti.cat/api/ha/link/revoke';
+const CREDENTIALS_URL = DOM_BASE + '/api/ha/credentials';
+const REVOKE_URL = DOM_BASE + '/api/ha/link/revoke';
+const CAM_ENDPOINT_URL = DOM_BASE + '/api/cameras/endpoint';
 
 const MOSQUITTO_CONF = '/etc/mosquitto/mosquitto.conf';
 const MOSQUITTO_CONF_D = '/etc/mosquitto/conf.d';
@@ -197,8 +201,11 @@ function fetchCredentials() {
 // Tell dom.oti.cat to revoke this device's link server-side so the long-lived JWT can no longer
 // fetch MQTT credentials. Best-effort: unlinking must succeed locally even if dom is unreachable.
 function revokeToken(cfg) {
-  if (!cfg || !cfg.token) return Promise.resolve();
-  return fetch(REVOKE_URL, { method: 'POST', headers: { 'Authorization': 'Bearer ' + cfg.token } })
+  // The HA token identifies the hub with an `ha` claim; a camera-only link has
+  // only the device token. Either can revoke the device's own link.
+  var tok = cfg && (cfg.token || cfg.deviceToken);
+  if (!tok) return Promise.resolve();
+  return fetch(REVOKE_URL, { method: 'POST', headers: { 'Authorization': 'Bearer ' + tok } })
     .then(function(r) { process.stdout.write('token revoke: ' + r.status + '\n'); })
     .catch(function(e) { process.stdout.write('token revoke failed: ' + e.message + '\n'); });
 }
@@ -1533,8 +1540,11 @@ function newConnection(name) {
 
 function connectionTarget(conn, cfg) {
   if (conn.name === 'cam') {
-    if (!cfg.cam || !cfg.cam.token || !cfg.cam.wsUrl) return null;
-    return { url: cfg.cam.wsUrl, token: cfg.cam.token };
+    // The control plane's answer outranks the persisted snapshot: the token is
+    // refreshed while connected and must not be rewritten to flash each time.
+    var cam = camRuntime || cfg.cam;
+    if (!cam || !cam.token || !cam.wsUrl) return null;
+    return { url: cam.wsUrl, token: cam.token };
   }
   if (!cfg.token || !cfg.wsUrl) return null;
   return { url: cfg.wsUrl, token: cfg.token };
@@ -1623,6 +1633,9 @@ function wsConnect(conn) {
     udpFlowsClear(conn);
     process.stdout.write(conn.name + ' ws closed, retry in ' + conn.backoff + 'ms\n');
     wsScheduleReconnect(conn);
+    // A cam socket that keeps failing is usually a stale relay or an expired
+    // token: ask the control plane before the next attempt.
+    if (conn.name === 'cam') refreshCamEndpoint(true);
   });
 
   sock.addEventListener('error', function() {
@@ -1660,6 +1673,90 @@ function wsStopAll() {
 function wsConnectAll() {
   wsConnect(connections.ha);
   wsConnect(connections.cam);
+}
+
+// --- Camera endpoint refresh ---
+// The link payload is only a snapshot of which relay to use. This keeps the cam
+// socket following what the control plane says is current, so creating,
+// deleting or replacing a relay needs no relink — and a revoked device simply
+// stops being given one. Polls every 5 min while connected, every minute while
+// the socket is down, and immediately when the socket drops (expired token).
+var camRuntime = null; // { token, wsUrl } — fresher than cfg.cam, never persisted alone
+var camEndpointLastFetch = 0;
+var camEndpointGone = false; // the device's link was revoked: stop asking until /store
+// Test hooks: shrink the poll in integration tests.
+var CAM_POLL_CONNECTED_MS = parseInt(process.env.DOMOTICAT_CAM_POLL_CONNECTED_MS || '300000', 10);
+var CAM_POLL_BROKEN_MS = parseInt(process.env.DOMOTICAT_CAM_POLL_BROKEN_MS || '60000', 10);
+
+function refreshCamEndpoint(force) {
+  var cfg = loadConfig();
+  if (camEndpointGone) return Promise.resolve();
+  // Before 1.15 the hub only had the HA token and the cam snapshot; either can
+  // identify the device for this call, and the answer hands back a proper
+  // device token that is stored for good.
+  var token = cfg.deviceToken || cfg.token || (cfg.cam && cfg.cam.token);
+  if (!token) return Promise.resolve();
+  var interval = connections.cam.connected ? CAM_POLL_CONNECTED_MS : CAM_POLL_BROKEN_MS;
+  if (!force && Date.now() - camEndpointLastFetch < interval) return Promise.resolve();
+  camEndpointLastFetch = Date.now();
+
+  return fetch(CAM_ENDPOINT_URL + '?device=' + encodeURIComponent(deviceId), {
+    headers: { 'X-Device-Token': token }
+  })
+    .then(function(r) {
+      if (r.status === 401 || r.status === 404) {
+        // Revoked, expired or never linked: drop the camera link and stop
+        // asking. /unlink does the same thing from the hub side.
+        var c = loadConfig();
+        delete c.cam;
+        delete c.deviceToken;
+        saveConfig(c);
+        camRuntime = null;
+        camEndpointGone = true;
+        wsStop(connections.cam);
+        process.stdout.write('cam endpoint: device link gone (' + r.status + ')\n');
+        return null;
+      }
+      if (!r.ok) return null;
+      return r.json();
+    })
+    .then(function(data) {
+      if (!data) return;
+      var next = data.cam || null;
+      var c = loadConfig();
+      var prev = camRuntime || c.cam || null;
+      var wsChanged = !!prev !== !!next || (prev && next && prev.wsUrl !== next.ws);
+      var dirty = false;
+
+      // Adopt the device token the control plane hands out, so an older link
+      // upgrades itself on the first poll.
+      if (data.deviceToken && data.deviceToken !== c.deviceToken) {
+        c.deviceToken = data.deviceToken;
+        dirty = true;
+      }
+
+      camRuntime = next ? { token: next.token, wsUrl: next.ws } : null;
+
+      // Persist only when the relay itself changes; the cam token is
+      // short-lived and lives in memory so the hub is not writing flash every
+      // few minutes.
+      if (!next && c.cam) {
+        delete c.cam;
+        dirty = true;
+      } else if (next && (!c.cam || c.cam.wsUrl !== next.ws)) {
+        c.cam = { token: next.token, wsUrl: next.ws };
+        dirty = true;
+      }
+
+      if (dirty) saveConfig(c);
+
+      if (wsChanged) {
+        process.stdout.write('cam endpoint: ' + (next ? next.ws : 'no relay') + '\n');
+        wsStop(connections.cam);
+        wsConnect(connections.cam);
+      }
+    })
+    .catch(function() {});
 }
 
 // --- Request handler ---
@@ -1700,6 +1797,9 @@ const server = http.createServer(function(req, res) {
         }
         cfg.deviceId = deviceId;
         cfg.linkedAt = new Date().toISOString();
+        // Device-scoped identity token: lets the hub ask the control plane for
+        // its camera endpoint later instead of relying on this snapshot.
+        if (data.deviceToken) cfg.deviceToken = data.deviceToken;
         if (!sameInstance) {
           cfg.integrations = { zigbee2mqtt: 'pending', mosquitto: 'pending', vpn: 'pending' };
         }
@@ -1719,6 +1819,10 @@ const server = http.createServer(function(req, res) {
           res.end('ok');
         };
         if (hasHa) fetchCredentials().then(finish); else finish();
+        // The snapshot is only a hint now: ask for the authoritative endpoint
+        // right away so a relay created after this link is picked up at once.
+        camEndpointGone = false;
+        refreshCamEndpoint(true);
       } catch {
         res.writeHead(400);
         res.end('bad request');
@@ -1830,6 +1934,15 @@ server.listen(PORT, '0.0.0.0', function() {
   process.stdout.write('oticonnect listening on :' + PORT + ' (device: ' + deviceId + ')\n');
   var cfg = loadConfig();
   wsConnectAll();
+  // Follow the control plane's current camera relay. The linked payload is a
+  // snapshot; this is what makes a new or replaced relay visible without a
+  // relink.
+  refreshCamEndpoint(true);
+  // Tick often enough to honour either interval; refreshCamEndpoint throttles.
+  setInterval(
+    function() { refreshCamEndpoint(false); },
+    Math.max(1000, Math.min(CAM_POLL_BROKEN_MS, 30 * 1000))
+  );
   if (cfg.integrations && cfg.integrations.vpn === 'applied') applyVpn();
   // Refresh stored credentials (best-effort). z2m/mosquitto config now lives in SMHUB's own config
   // store, so there's no drift to reconcile on boot — the SMHUB no longer clobbers our settings.
